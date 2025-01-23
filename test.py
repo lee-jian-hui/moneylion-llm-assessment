@@ -13,22 +13,27 @@ from langchain.llms.base import LLM
 
 MODEL_PATH = "./models/mistral-7b-instruct-v0.1.Q4_K_M.gguf"  # Update this to the actual path of your model file
 
-DATABASE_URL = "sqlite:///banking.db"  # Replace with your actual database URL
+DATABASE_URL = "sqlite:///banking.db"  # Replace with your actual database URL4
+MAX_TOKENS = 200
+TEMPERATURE = 0.4
 
+
+# Custom LLM Wrapper for llama_cpp
 # Custom LLM Wrapper for llama_cpp
 class CustomLlamaLLM(LLM):
     def __init__(self, model: Llama):
         super().__init__()
-        self.model = model
+        self._model = model
 
     @property
     def _llm_type(self) -> str:
         return "llama_cpp"
 
-    def _call(self, prompt: str, stop: list = None) -> str:
-        response = self.model(prompt, stop=stop, max_tokens=200, temperature=0.5)
+    def _call(self, prompt: str, stop: list = None, **kwargs: Any) -> str:
+        response = self._model(
+            prompt, stop=stop, max_tokens=MAX_TOKENS, temperature=TEMPERATURE
+        )
         return response["choices"][0]["text"].strip()
-
 
 # Mock BaseCache implementation
 class SimpleCache(BaseCache):
@@ -77,29 +82,19 @@ def load_database_connection():
         print(f"Error connecting to database: {e}")
         return None
 
-def create_banking_assistant(database, model):
-    """
-    Create a custom SQLDatabaseChain using the Mistral model.
-
-    Args:
-        database (SQLDatabase): A connection to the SQL database.
-        model (Llama): The loaded Mistral-7B-GGUF model.
-
-    Returns:
-        SQLDatabaseChain: A chain for querying the database using natural language.
-    """
+# Create the banking assistant
+def create_banking_assistant(database: SQLDatabase, model: Llama) -> SQLDatabaseChain:
     try:
-        db_chain = SQLDatabaseChain.from_llm(llm=model, db=database, verbose=True)
-        # db_chain = SQLDatabaseChain(llm=model, database=database, verbose=True)
+        llama_llm = CustomLlamaLLM(model=model)
+        db_chain = SQLDatabaseChain.from_llm(llm=llama_llm, db=database, verbose=True)
         print("Banking assistant created successfully.")
         return db_chain
     except Exception as e:
         print(f"Error creating banking assistant: {e}")
         return None
 
+# Main function
 def main():
-    # Path to the GGUF model file
-
     # Load the model
     model = load_model(MODEL_PATH)
     if not model:
