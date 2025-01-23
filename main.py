@@ -3,7 +3,7 @@ import sqlite3
 from typing import Any
 import pandas as pd
 import logging
-from transformers import pipeline, AutoModelForCausalLM, AutoTokenizer
+from transformers import pipeline, AutoModelForCausalLM, AutoModelForSeq2SeqLM, AutoTokenizer
 from dotenv import load_dotenv
 
 # from langchain.chains import SQLDatabaseChain
@@ -20,6 +20,10 @@ from utils import setup_logger
 # CONSTANTS and ENVIRONMENT VARIABLES
 load_dotenv()
 MODEL_NAME=os.getenv("MODEL_NAME")
+# File paths
+DB_PATH = "data.db"
+CSV_PATH = "data.csv"
+TABLE_NAME = "transactions"
 
 
 
@@ -41,20 +45,28 @@ def create_llm():
     Create a simple Hugging Face LLM pipeline.
     Replace 'gpt2' with a more suitable finetuned or instruct model if available.
     """
-    model_name = "gpt2"
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForCausalLM.from_pretrained(model_name)
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    # model = AutoModelForCausalLM.from_pretrained(MODEL_NAME)
+    model = AutoModelForSeq2SeqLM.from_pretrained(MODEL_NAME)  # Use Seq2Seq model
 
     # Create a text-generation pipeline
+    # hf_pipeline = pipeline(
+    #     "text-generation",
+    #     model=model,
+    #     tokenizer=tokenizer,
+    #     max_new_tokens=100,
+    #     do_sample=True,
+    #     temperature=0.1,
+    # )
+
     hf_pipeline = pipeline(
-        "text-generation",
+        "text2text-generation",  # Use text2text-generation for seq2seq models
         model=model,
         tokenizer=tokenizer,
         max_new_tokens=100,
         do_sample=True,
         temperature=0.1,
     )
-
     # Wrap it in a LangChain LLM interface
     llm = HuggingFacePipeline(pipeline=hf_pipeline)
     return llm
@@ -76,22 +88,26 @@ def create_sqlite_db_from_csv(db_path: str, csv_path: str, table_name: str):
 
 
 def main():
-    # File paths
-    db_path = "data.db"
-    csv_path = "data.csv"
-    table_name = "transactions"
 
     # Create the SQLite database from the CSV file if it doesn't exist
-    create_sqlite_db_from_csv(db_path, csv_path, table_name)
+    create_sqlite_db_from_csv(DB_PATH, CSV_PATH, TABLE_NAME)
 
     # Create an LLM
     llm = create_llm()
 
     # Connect to the SQLite DB
-    db = SQLDatabase.from_uri(f"sqlite:///{db_path}")
+    db = SQLDatabase.from_uri(f"sqlite:///{DB_PATH}")
+    logger.info(f"db.dialect: {db._engine.dialect.name}")
 
     # Create a chain that can query this DB
     db_chain = SQLDatabaseChain.from_llm(llm, db, verbose=True)
+    prompt = db_chain.llm_chain.prompt
+
+    # 1. To get the raw template string (if applicable)
+    try:
+        print("Raw template string:", prompt.template)
+    except AttributeError:
+        print("This prompt does not have a `template` attribute.")
 
     # Ask a question in natural language
     questions = [
@@ -99,18 +115,65 @@ def main():
     ]
     for question in questions:
         try:
-            logger.info("Question:", question)
+            logger.info(f"Question: {question}")
             logger.info("Generating SQL query...")
-            response = db_chain.invoke({"question": question})
-            logger.info("Generated SQL Query:", response["sql_query"])
-            logger.info("Answer:", response["answer"])
+            response = db_chain.invoke({"query": question})
+            # response = db_chain.invoke({"question": question})
+            logger.info(f'response: {response}')
+            logger.info(f'Generated SQL Query: {response["sql_query"]}')
+            logger.info(f'Answer: {response["answer"]}')
         except Exception as e:
             logger.info("Error:", e)
             raise e
 
 
+def testing():
+    # Create the SQLite database from the CSV file if it doesn't exist
+    create_sqlite_db_from_csv(DB_PATH, CSV_PATH, TABLE_NAME)
+
+    # Create an LLM
+    llm = create_llm()
+
+    # Connect to the SQLite DB
+    db = SQLDatabase.from_uri(f"sqlite:///{DB_PATH}")
+
+    # Create a chain that can query this DB
+    db_chain = SQLDatabaseChain.from_llm(llm, db, verbose=True)
+    # prompt_template = PromptTemplate(
+    #     input_variables=["country"],
+    #     template=SQLDatabaseChain.prompt
+    # )
+    # # Fill the prompt with variables
+    # filled_prompt = prompt_template.format(country="France")
+    # print(filled_prompt)
+
+    from langchain.prompts import PromptTemplate
+
+    # Assuming db_chain.llm_chain.prompt is a BasePromptTemplate
+    prompt = db_chain.llm_chain.prompt
+
+    # 1. To get the raw template string (if applicable)
+    try:
+        print("Raw template string:", prompt.template)
+    except AttributeError:
+        print("This prompt does not have a `template` attribute.")
+
+    # # 2. To format the prompt with variables
+    # # Replace `key=value` pairs with the actual input variables expected by your prompt
+    # formatted_prompt = prompt.format(**{"key1": "value1", "key2": "value2"})
+    # print("Formatted prompt:", formatted_prompt)
+
+
+    
+    # 4. Ask a question in natural language
+    question = "How many rows are in the 'transactions' table?"
+    response = db_chain.run(question)
+    print("Answer:", response)
+
+
+
+
+
 if __name__ == "__main__":
     main()
-
-
-
+    # testing()
