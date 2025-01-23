@@ -1,17 +1,15 @@
 """ 
 __author__: Lee Jian Hui
+
+
 USAGE: 
 python -m main --simulation # simulating a chat loop againt a list of pre-defined questions
 python -m main --benchmark  # benchmark against a list of pre-defined questions
 python -m main # normal run as though talking to the chatbot until you type "exit"
 
 FUTURE IMPROVEMENTS:
-TODO: streaming tokens as an option
-TODO: hook up an open source GUI that allows upload of csv files and auto conversion into databases ready to be processed and talked to by the LLM (or other relevant data connectors)
-TODO: create a function that downloads and/or post-download-verification across a list of provided model names from hugging face or from locally avaialble .gguf models
-TODO: ability to customise further on LLM parameters loaded by llama-cpp
+TODO: add arguments support so the script behavior can be determined by user 
 TODO: gracefully handle failures of SQL queries so the model can have graceful fallback
-TODO: the benchmark function into an e2e test to cover random user inputs as well (that is logical)
 
 TODO: simulate a system given a client id to:
 1. get his transactions within a certain time range
@@ -22,20 +20,25 @@ TODO: given a user name tied to client id (assume another new table storing this
 2. track user's spending habit across all categories and merchants
 3. categorize merchants under entertainment, food, etc.
 
+
 TODO: think about other actions besides SQL querying, can we update the database maybe?
 TODO: is it possible for a dynamic max token for the model?
 TODO: is it possible for the model to transition into a more QnA style using a RAG pipeline chain
-
+TODO: the benchmark function into an e2e test to cover random user inputs as well (that is logical)
+TODO: streaming tokens as an option
+TODO: hook up an open source GUI that allows upload of csv files and auto conversion into databases ready to be processed and talked to by the LLM (or other relevant data connectors)
+TODO: create a function that downloads and/or post-download-verification across a list of provided model names from hugging face or from locally avaialble .gguf models
+TODO: ability to customise further on LLM parameters loaded by llama-cpp
 """
 
 
 import logging
 import os
 import time
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple, Union
 from llama_cpp import Llama
 
-from langchain_experimental.sql import SQLDatabaseChain
+from langchain_experimental.sql import SQLDatabaseChain, SQLDatabaseSequentialChain
 from langchain_huggingface import HuggingFacePipeline
 from langchain_community.utilities import SQLDatabase
 from langchain.schema.cache import BaseCache
@@ -45,17 +48,17 @@ from langchain.schema import BaseOutputParser
 from langchain.llms.base import LLM
 from langchain.prompts import BasePromptTemplate, PromptTemplate
 
+from classes import GracefulSQLDatabaseChain
 from myprompts import SQLITE_PROMPT
 from utils import setup_logger, truncate_conversation_history
 from myprompts import prompt_template_generator, _sqlite_prompt1, _sqlite_prompt2, _sqlite_prompt3
 import myprompts
 
-MODEL_PATH = "./models/mistral-7b-instruct-v0.1.Q4_K_M.gguf"  # Update this to the actual path of your model file
-
-DATABASE_URL = "sqlite:///data.db"  # Replace with your actual database URL
+MODEL_PATH = "./models/mistral-7b-instruct-v0.1.Q4_K_M.gguf"
+DATABASE_URL = "sqlite:///data.db" 
 MAX_TOKENS = 200
 TEMPERATURE = 0.4
-CONTEXT_WINDOW_SIZE=8000 
+CONTEXT_WINDOW_SIZE=8000 # TODO: let this be specified in argvs 
 # CONTEXT_WINDOW_SIZE=32768
 # CONTEXT_WINDOW_SIZE=4096
 
@@ -109,56 +112,6 @@ class SimpleCache(BaseCache):
 SQLDatabaseChain.model_rebuild()
 
 
-def extend_prompt_template(base_template: PromptTemplate, additional_context: str) -> PromptTemplate:
-    """
-    Extend an existing PromptTemplate by appending additional context.
-
-    Args:
-        base_template (PromptTemplate): The original prompt template.
-        additional_context (str): The additional instructions or context to append.
-
-    Returns:
-        PromptTemplate: A new prompt template with the added context.
-    """
-    # Combine the original template and additional context
-    extended_template_string = base_template.template.strip() + "\n\n" + additional_context.strip()
-
-    # SQLITE_PROMPT = PromptTemplate(
-    #     input_variables=["input", "table_info", "top_k"],
-    #     template=_sqlite_prompt + PROMPT_SUFFIX,
-    # )
-
-    # Create a new PromptTemplate using the combined template string
-    extended_template = PromptTemplate(
-        input_variables=base_template.input_variables,
-        template=extended_template_string
-    )
-
-    logger.info(f"modified template: {extended_template.template}")
-    return extended_template
-
-
-# def modify_raw_template(raw_template: str, additional_context: str) -> str:
-#     """
-#     Modify the raw template string to include additional instructions or context.
-
-#     Args:
-#         raw_template (str): The base template string provided by the SQLDatabaseChain.
-
-#     Returns:
-#         str: The modified template string.
-#     """
-#     # Add additional instructions or clarify user behavior
-#     # additional_context = """
-#     # Note: Always answer in a complete, concise manner and avoid continuing conversations unnecessarily.
-#     # If the user query appears to be a continuation of a previous conversation, rephrase it as an independent query.
-#     # """
-    
-#     # Append the additional context to the existing template
-#     modified_template = raw_template.strip() + "\n" + additional_context.strip()
-    
-#     logger.info("Modified template:\n%s", modified_template)
-#     return modified_template
 
 def load_model(model_path) -> Llama:
     """
@@ -195,9 +148,13 @@ def load_database_connection(database_url: str = DATABASE_URL) -> SQLDatabase:
         return None
 
 
-def create_banking_assistant(database: SQLDatabase, llm: CustomLlamaLLM) -> SQLDatabaseChain:
+def create_sql_assistant(
+    database: SQLDatabase, 
+    llm: CustomLlamaLLM, 
+    database_chain_cls: Union[SQLDatabaseChain | SQLDatabaseSequentialChain]=GracefulSQLDatabaseChain 
+) -> Union[SQLDatabaseChain | SQLDatabaseSequentialChain]:
     try:
-        db_chain = SQLDatabaseChain.from_llm(llm=llm, db=database, verbose=True)
+        db_chain = database_chain_cls.from_llm(llm=llm, db=database, verbose=True)
 
         # 1. To get the raw template string (if applicable)
         # try:
@@ -324,6 +281,8 @@ def test_database_context(sql_llm_chain, database):
         logger.error("Error while testing database context: %s", e)
 
 
+
+# TODO: fix this to use chat loop
 def benchmark_models_with_contexts(
     model_paths: List[str],
     context_sizes: List[int],
@@ -355,7 +314,7 @@ def benchmark_models_with_contexts(
 
                 # Create SQLDatabaseChain
                 database = load_database_connection()
-                sql_llm_chain = create_banking_assistant(database, llm)
+                sql_llm_chain = create_sql_assistant(database, llm)
                 sql_llm_chain.llm_chain.prompt = prompt_template
 
                 # Benchmark questions
@@ -395,7 +354,7 @@ def benchmark_models_with_contexts(
                 logger.info(f"Benchmark saved to {report_filepath}")
 
 
-def main():
+def build() -> Union[SQLDatabaseChain | SQLDatabaseSequentialChain]:
     # Load the model
     model = load_model(MODEL_PATH)
     if not model:
@@ -411,7 +370,7 @@ def main():
     llama_llm = CustomLlamaLLM(model)
 
     # Create the banking assistant
-    sql_llm_chain = create_banking_assistant(database, llama_llm)
+    sql_llm_chain = create_sql_assistant(database, llama_llm)
     if not sql_llm_chain:
         logger.error("Failed to create SQL LLM chain.")
         return
@@ -419,47 +378,7 @@ def main():
     sql_llm_chain.llm_chain.prompt = SQLITE_PROMPT
 
     
-    # Test the database context
-    # test_database_context(sql_llm_chain, database)
-
-    # Chat loop
-    # questions = [
-    #     How much did I spend last week?
-    #     2. What is the amount I have spent on Uber in the last 5 months?
-    # ]
-
-
-    questions = [
-        "How many rows are in the 'transactions' table?",
-        "Can you filter for transactions with merchant is '1INFINITE'",
-    ]
-
-    logger.info(f"questions: {questions}")
-    logger.info("USING PROMPT 1")
-    chat_loop(sql_llm_chain, prompt_template=prompt_template_generator(_sqlite_prompt1), simulated=True, questions=questions[:1])
-    logger.info("USING PROMPT 2")
-    chat_loop(sql_llm_chain, prompt_template=prompt_template_generator(_sqlite_prompt2), simulated=True, questions=questions[:1])
-    logger.info("USING PROMPT 3")
-    chat_loop(sql_llm_chain, prompt_template=prompt_template_generator(_sqlite_prompt3), simulated=True, questions=questions[:1])
-
-    questions = [
-        "Can you filter for transactions with merchant is '1INFINITE'",
-    ]
-    logger.info(f"questions: {questions}")
-    logger.info("USING PROMPT 1")
-    chat_loop(sql_llm_chain, prompt_template=prompt_template_generator(_sqlite_prompt1), simulated=True, questions=questions[:1])
-    logger.info("USING PROMPT 2")
-    chat_loop(sql_llm_chain, prompt_template=prompt_template_generator(_sqlite_prompt2), simulated=True, questions=questions[:1])
-    logger.info("USING PROMPT 3")
-    chat_loop(sql_llm_chain, prompt_template=prompt_template_generator(_sqlite_prompt3), simulated=True, questions=questions[:1])
-
-
-
-    # chat_loop(sql_llm_chain, simulated=False)
-
-
-if __name__ == "__main__":
-    # main()
+def benchmark_run():
     # Define models, context sizes, and prompts for benchmarking
     model_paths = ["./models/mistral-7b-instruct-v0.1.Q4_K_M.gguf"]
     context_sizes = [4096, 8000, 16384]
@@ -477,3 +396,18 @@ if __name__ == "__main__":
 
     # Run benchmarking
     benchmark_models_with_contexts(model_paths, context_sizes, prompt_templates, question_set)
+
+
+
+if __name__ == "__main__":
+    # Test the database context
+    # test_database_context(sql_llm_chain, database)
+
+
+    # TODO: add the ability to parse arugment here, e.g. --simulated --benchmark, 
+    # both must be mutually exclusive, if no flags passed here this is a non-simulated run
+
+
+    # benchmark_run()
+    sql_llm_chain = build()
+    chat_loop(sql_llm_chain, simulated=False)

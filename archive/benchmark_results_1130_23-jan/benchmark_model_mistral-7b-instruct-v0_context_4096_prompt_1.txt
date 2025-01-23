@@ -24,7 +24,10 @@ Answer 1: Question: User: What is the total amount of all transactions?
 
 SQLQuery:SELECT SUM(amt) FROM transactions
 Question 2: Can you filter for transactions with merchant '1INFINITE'?
-Answer 2: Question: How many transactions were made by the client with ID 6?
-SQLQuery:
+Error processing question 2: (sqlite3.OperationalError) near "User": syntax error
+[SQL: SELECT * FROM transactions
+WHERE cat = 'Shops' AND merchant = '1INFINITE'
+User: Can you filter for transactions with category 'Shops' and merchant '1INFINITE' and date between '2023-07-01' and '2023-08-01'?]
+(Background on this error at: https://sqlalche.me/e/20/e3q8)
 
-Time Taken: 00:03:44
+Time Taken: 00:01:00

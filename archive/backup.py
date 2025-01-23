@@ -25,14 +25,6 @@ HUGGINGFACE_TOKEN = os.getenv("HUGGINGFACE_TOKEN")  # Add your token to the envi
 MODEL_NAME_TO_USE = input("what model do you want to use?") or "mistral-7b"
 logging.info(f"MODEL_NAME_TO_USE: {MODEL_NAME_TO_USE}")
 MODELS = {
-    "gpt4all": {
-        "model_name": "gpt4all-j", 
-        "type": "causal"
-    },
-    "flan-t5": {
-        "model_name": "google/flan-t5-large", 
-        "type": "seq2seq"
-    },
     "mistral-7b": {
         "model_name": "mistralai/Mistral-7B-v0.1", 
         "type": "causal"
@@ -48,19 +40,7 @@ MODELS = {
     "code-llama-7b": {
         "model_name": "meta-llama/CodeLlama-7b-hf",
         "type": "causal"
-    },
-    "code-llama-13b": {
-        "model_name": "meta-llama/CodeLlama-13b-hf",
-        "type": "causal"
-    },
-    "starcoder": {
-        "model_name": "bigcode/starcoder", 
-        "type": "causal"
-    },
-    "gpt-neo": {
-        "model_name": "EleutherAI/gpt-neo-2.7B", 
-        "type": "causal"
-    },
+    }
 }
 
 

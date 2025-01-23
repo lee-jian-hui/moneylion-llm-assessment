@@ -1,7 +1,7 @@
 import logging
 import psutil
 import torch
-
+from langchain.prompts import PromptTemplate
 
 
 def setup_logger(name: str, log_file: str = "main.log", level: int = logging.DEBUG):
@@ -94,6 +94,30 @@ def truncate_conversation_history(
     # Return the reversed truncated history (to maintain chronological order)
     return "\n".join(reversed(truncated_history))
 
+
+def extend_prompt_template(base_template: PromptTemplate, additional_context: str) -> PromptTemplate:
+    """
+    Extend an existing PromptTemplate by appending additional context.
+
+    Args:
+        base_template (PromptTemplate): The original prompt template.
+        additional_context (str): The additional instructions or context to append.
+
+    Returns:
+        PromptTemplate: A new prompt template with the added context.
+    """
+    # Combine the original template and additional context
+    extended_template_string = base_template.template.strip() + "\n\n" + additional_context.strip()
+
+
+    # Create a new PromptTemplate using the combined template string
+    extended_template = PromptTemplate(
+        input_variables=base_template.input_variables,
+        template=extended_template_string
+    )
+
+    logger.info(f"modified template: {extended_template.template}")
+    return extended_template
 
 
 logger = setup_logger("utils", level=logging.INFO)
