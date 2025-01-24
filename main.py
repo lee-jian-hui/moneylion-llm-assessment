@@ -19,8 +19,9 @@ TODO: given a user name tied to client id (assume another new table storing this
 
 
 TODO: implement a mechanism to ask user to wait while tokens are getting processed in terms of a non-streaming implementation
-TODO: make gracefully failure SQLLLM CHAIN more robust with more variance and configs to the retry mechanism
+TODO: make gracefully failure SQLLLM CHAIN more robust with more variance and configs to the retry mechanism, the graceful mechanism is more useful for stateless, because it should retry the SQL query based on the previous failure 
 TODO: think about other actions besides SQL querying, can we update the database maybe?
+TODO: think about a QnA capability such that the LLM can ask more questions if the context is unclear or the query failed, then the graceful retry mechanism will be to ask for more context
 TODO: is it possible for a dynamic max token for the model?
 TODO: is it possible for the model to transition into a more QnA style using a RAG pipeline chain
 TODO: the benchmark function into an e2e test to cover random user inputs as well (that is logical)
@@ -49,6 +50,7 @@ import os
 import time
 from typing import Any, List, Optional, Tuple, Type, Union
 from llama_cpp import Llama
+from pydantic import Field
 
 from langchain_experimental.sql import SQLDatabaseChain, SQLDatabaseSequentialChain
 from langchain_huggingface import HuggingFacePipeline
@@ -59,25 +61,29 @@ from langchain.sql_database import SQLDatabase
 from langchain.schema import BaseOutputParser
 from langchain.llms.base import LLM
 from langchain.prompts import BasePromptTemplate, PromptTemplate
-from pydantic import Field
+from langchain.chains import ConversationChain
+from langchain.memory import ConversationBufferMemory
 
-from classes import GracefulSQLDatabaseChain
+from classes import CustomSQLDatabaseChain, GracefulSQLDatabaseChain
 import configs
 from mydatabase import initialize_database
-from utils import BenchmarkReport, setup_logger, truncate_conversation_history
+from utils import BenchmarkReport, truncate_conversation_history
+from my_logger import GLOBAL_LOGGER
 from myprompts import ALL_PROMPT_STRINGS, DEFAULT_SQLITE_PROMPT, prompt_template_generator, _sqlite_prompt1, _sqlite_prompt2, _sqlite_prompt3
 import myprompts
 from configs import DATABASE_PATH, DATABASE_URL, DEFAULT_CHAT_OUTPUT_FILEPATH, DEFAULT_MODEL_PATH
 
 
-DEFAULT_MAX_TOKENS = 200
-DEFAULT_TEMPERATURE=0.4
-DEFAULT_CONTEXT_WINDOW_SIZE=8000 # TODO: let this be specified in argvs 
-ALLOWED_WINDOW_SIZES=[16000, 32768]
-logger = setup_logger(__name__, "main.log", level=logging.INFO)
+DEFAULT_MAX_TOKENS = configs.DEFAULT_MAX_TOKENS
+DEFAULT_TEMPERATURE=configs.DEFAULT_TEMPERATURE
+DEFAULT_CONTEXT_WINDOW_SIZE=configs.DEFAULT_CONTEXT_WINDOW_SIZE
+ALLOWED_WINDOW_SIZES=configs.ALLOWED_WINDOW_SIZES
+# DEFAULT_MAX_TOKENS = 200
+# DEFAULT_TEMPERATURE=0.4
+# DEFAULT_CONTEXT_WINDOW_SIZE=8000
+# ALLOWED_WINDOW_SIZES=[16000, 32768]
 
-
-
+logger = GLOBAL_LOGGER
 
 # TODO: Could implement caching for production in the far future
 # Mock Caching, disabled
@@ -202,13 +208,6 @@ def create_llm_chain(
         return None
 
 
-
-from langchain.chains import ConversationChain
-from langchain.memory import ConversationBufferMemory
-
-from langchain.chains import ConversationChain
-from langchain.memory import ConversationBufferMemory
-
 def chat_loop(
     llm_chain: Union[SQLDatabaseChain, SQLDatabaseSequentialChain], 
     prompt_template: PromptTemplate, 
@@ -259,6 +258,8 @@ def chat_loop(
 
                 print("\nQuery Result:")
                 print(response)
+                logger.info(f"question: {question}")
+                logger.info(f"llm response: {response}")
 
                 if report:
                     report.add_question_and_answer(question, response)
@@ -354,8 +355,9 @@ def benchmark_models_with_contexts(
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
 
-    for model_path in model_paths:
-        for context_window_size in context_window_sizes:
+    # NOTE: context_window_size at most outer loop to prevent get all data for smaller windows before memory low crashes happen
+    for context_window_size in context_window_sizes:
+        for model_path in model_paths:
             llama_llm = build_llama_llm(model_path=model_path, context_window_size=context_window_size)
 
             # model = Llama(model_path=model_path, n_ctx=context_size)
@@ -367,7 +369,7 @@ def benchmark_models_with_contexts(
                 
                 output_file = os.path.join(
                     output_dir, 
-                    f"benchmark_model_{os.path.basename(model_path).split('.')[0]}_"
+                    f'benchmark_model_{"".join(os.path.basename(model_path).split(".")[:-1])}_'
                     f"context_{context_window_size}_prompt_{idx}.txt"
                 )
                 
@@ -444,7 +446,7 @@ def benchmark_run(use_memory: bool = False) -> None:
         context_sizes, 
         prompt_templates, 
         question_set,
-        llm_chain_cls=SQLDatabaseChain,
+        llm_chain_cls=configs.DEFAULT_SQL_CHAIN_CLS,
         output_dir=output_dir,
         use_memory=use_memory
     )
@@ -453,7 +455,7 @@ def main_run_loop(use_memory: bool = False):
     # choose sqllite prompt 3 from my prompt
     context_window_size = DEFAULT_CONTEXT_WINDOW_SIZE
     llama_llm = build_llama_llm(context_window_size=context_window_size)
-    sql_llm_chain = build_llm_chain(llama_llm, prompt=DEFAULT_SQLITE_PROMPT, sql_chain_cls=SQLDatabaseChain)
+    sql_llm_chain = build_llm_chain(llama_llm, prompt=DEFAULT_SQLITE_PROMPT, sql_chain_cls=configs.DEFAULT_SQL_CHAIN_CLS)
     chat_loop(
         llm_chain=sql_llm_chain, 
         prompt_template=DEFAULT_SQLITE_PROMPT,
@@ -493,11 +495,8 @@ if __name__ == "__main__":
         # Simulate a chain of questions
         context_window_size = DEFAULT_CONTEXT_WINDOW_SIZE
         llama_llm = build_llama_llm(context_window_size=context_window_size)
-        sql_llm_chain = build_llm_chain(llama_llm, prompt=DEFAULT_SQLITE_PROMPT, sql_chain_cls=SQLDatabaseChain)
-        simulated_questions = [
-            "How many rows are in the 'transactions' table?",
-            "Can you filter for transactions with merchant '1INFINITE'?",
-        ]
+        sql_llm_chain = build_llm_chain(llama_llm, prompt=DEFAULT_SQLITE_PROMPT, sql_chain_cls=configs.DEFAULT_SQL_CHAIN_CLS)
+        simulated_questions = configs.SIMULATED_QUES_SET
         chat_loop(
             llm_chain=sql_llm_chain,
             prompt_template=DEFAULT_SQLITE_PROMPT,

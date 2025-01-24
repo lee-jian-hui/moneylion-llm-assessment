@@ -1,5 +1,7 @@
+from typing import Dict, Optional, Any, List
 
-from langchain_experimental.sql import SQLDatabaseChain
+
+from langchain_experimental.sql import SQLDatabaseChain, SQLDatabaseSequentialChain
 from langchain_huggingface import HuggingFacePipeline
 from langchain_community.utilities import SQLDatabase
 from langchain.schema.cache import BaseCache
@@ -20,12 +22,37 @@ from langchain_core.language_models import BaseLanguageModel
 from langchain_core.prompts.prompt import PromptTemplate
 
 
-from typing import Dict, Optional, Any, List
-
+from my_logger import GLOBAL_LOGGER
 
 INTERMEDIATE_STEPS_KEY = "intermediate_steps"
 SQL_QUERY = "SQLQuery:"
 SQL_RESULT = "SQLResult:"
+
+
+logger = GLOBAL_LOGGER
+
+class CustomSQLDatabaseChain(SQLDatabaseChain):
+    def _call(self, inputs: Dict[str, Any], run_manager: Optional[CallbackManagerForChainRun] = None) -> Dict[str, Any]:
+        # Access the filled prompt
+        filled_prompt = self.llm_chain.prompt.format(**inputs)
+        logger.info(f"Filled Prompt:\n{filled_prompt}")
+        return super()._call(inputs, run_manager)
+
+
+class CustomSQLDatabaseSequentialChain(SQLDatabaseSequentialChain):
+    def _call(self, inputs: Dict[str, Any], run_manager: Optional[CallbackManagerForChainRun] = None) -> Dict[str, Any]:
+        # Access the filled prompt
+        filled_prompt = self.sql_chain.llm_chain.prompt.format(**inputs)
+        logger.info(f"Filled Prompt:\n{filled_prompt}")
+        return super()._call(inputs, run_manager)
+
+
+# class CustomSQLDatabaseSequentialChain(SQLDatabaseSequentialChain):
+#     def run(self, *args, **kwargs):
+#         # Access the filled prompt
+#         filled_prompt = self.llm_chain.prompt.format(**kwargs)
+#         logger.info(f"Filled Prompt:\n{filled_prompt}")
+#         return super().run(*args, **kwargs)
 
 
 # NOTE: the behvaiour is not robust yet, so more modifications are necessary

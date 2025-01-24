@@ -6,14 +6,13 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-from utils import setup_logger
 from dotenv import load_dotenv
 from configs import DATABASE_PATH, DATABASE_URL, TRANSACTION_CSV, CLIENT_INFO_CSV
 from datetime import datetime   
 
+from my_logger import GLOBAL_LOGGER
 
-
-logger = setup_logger(__name__, log_file="database.log", level=logging.INFO)
+logger = GLOBAL_LOGGER
 # SQLAlchemy Base and Engine
 Base = declarative_base()
 

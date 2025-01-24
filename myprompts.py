@@ -238,6 +238,7 @@ ALL_PROMPT_STRINGS=[
     # _sqlite_prompt3,
     # _sqlite_prompt4,
     _sqlite_prompt5,
+    _sqlite_prompt6,
 ]
 
 DEFAULT_SQLITE_PROMPT = PromptTemplate(

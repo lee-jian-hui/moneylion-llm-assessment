@@ -4,42 +4,10 @@ import psutil
 import torch
 from langchain.prompts import PromptTemplate
 import time
+from my_logger import GLOBAL_LOGGER
 
 
-def setup_logger(name: str, log_file: str = "main.log", level: int = logging.DEBUG):
-    """
-    Sets up a logger that logs to both the console and a log file.
-
-    Parameters:
-    - name (str): The name of the logger.
-    - log_file (str): The file to log messages to (default: 'main.log').
-    - level (int): The logging level (default: logging.DEBUG).
-
-    Returns:
-    - logger (logging.Logger): Configured logger instance.
-    """
-    # Create a logger
-    logger = logging.getLogger(name)
-    logger.setLevel(level)
-
-    # Create handlers
-    console_handler = logging.StreamHandler()  # Logs to the console
-    file_handler = logging.FileHandler(log_file)  # Logs to the file
-
-    # Create formatters
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    console_handler.setFormatter(formatter)
-    file_handler.setFormatter(formatter)
-
-    # Add handlers to the logger
-    logger.addHandler(console_handler)
-    logger.addHandler(file_handler)
-
-    return logger
-
-
+logger = GLOBAL_LOGGER
 
 def log_resource_usage(logger: logging.Logger):
     logger.info(f"CPU memory usage: {psutil.virtual_memory().percent}%")
@@ -131,14 +99,22 @@ class BenchmarkReport:
         self.questions = []
         self.answers = []
         self.errors = []
+        self.conversation_steps = 0
+        self.conversation_history_lines = []
 
     def add_question_and_answer(self, question: str, answer: str):
         self.questions.append(question)
         self.answers.append(answer)
+        self.conversation_history_lines.append(f"Question {self.conversation_steps + 1}: {question}")
+        self.conversation_history_lines.append(f"Answer {self.conversation_steps + 1}: {answer}")
+        self.conversation_steps+=1
 
     def add_error(self, question: str, error: str):
         self.questions.append(question)
         self.errors.append(error)
+        self.conversation_history_lines.append(f"Question {self.conversation_steps + 1}: {question}")
+        self.conversation_history_lines.append(f"Error: {error}")
+        self.conversation_steps+=1
 
     def generate_report(self) -> str:
         end_time = time.time()
@@ -152,15 +128,19 @@ class BenchmarkReport:
             "",
         ]
 
-        for i, question in enumerate(self.questions):
-            report_lines.append(f"Question {i + 1}: {question}")
-            if i < len(self.answers):
-                report_lines.append(f"Answer {i + 1}: {self.answers[i]}")
-            elif i < len(self.errors):
-                report_lines.append(f"Error {i + 1}: {self.errors[i]}")
-            report_lines.append("")
+        # for i, question in enumerate(self.questions):
+        #     report_lines.append(f"Question {i + 1}: {question}")
+        #     if i < len(self.answers):
+        #         report_lines.append(f"Answer {i + 1}: {self.answers[i]}")
+        #     elif i < len(self.errors):
+        #         report_lines.append(f"Error {i + 1}: {self.errors[i]}")
+        #     report_lines.append("")
+
+        report_lines +=  self.conversation_history_lines
 
         report_lines.append(f"Time Taken: {total_time}")
+        report_lines.append(f"Error Count: {len(self.errors)}")
+
         return "\n".join(report_lines)
 
 
@@ -180,5 +160,4 @@ class BenchmarkReport:
             file.write(self.generate_report())
 
 
-logger = setup_logger("utils", level=logging.INFO)
-logger.info(f"get_device: {get_device()}")
+

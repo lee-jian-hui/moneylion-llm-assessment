@@ -73,6 +73,6 @@ different versions of mistral-6b v0.1,v0.2,v0.3
 codellama-34b-instruct.Q3_K_L.gguf (takes way too long to generate the output benchmarks for so i gaveup ~30 mins for a simple prompt)
 
 
-
+# after experimenting with more advanced models of mistral-7b the syntax of SQL code looks fine, howevever, it easily fails at tasks requiring data across multiple tables, this leads me to believe aneven more advanced pipeline is needed ,we could consider looking into SQLDatabaseSequentialChain from langchain 
 
 # estimated time taken: ~ 20 hrs / 3 days

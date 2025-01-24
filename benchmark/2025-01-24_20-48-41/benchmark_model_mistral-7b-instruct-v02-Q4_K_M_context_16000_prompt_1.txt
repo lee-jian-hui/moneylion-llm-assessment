@@ -20,13 +20,18 @@ Question: {input}
 
 
 Question 1: How many rows are in the 'transactions' table?
-Answer 1: There are 257,063 rows in the 'transactions' table.
+Error 1: Error processing query: 'top_k'
 
 Question 2: Can you filter for transactions with merchant '1INFINITE'?
-Answer 2: The following transactions have been made with the merchant '1INFINITE': [('1INFINITELOOP@ 07/25 #68 PMNT RCVD 1INFINITELOOP@APP 68 CA', 59.1), ('1INFINITELOOP@ 08/14 #68 PMNT RCVD 1INFINITELOOP@APP 68 CA', 4.924), ('1INFINITELOOP@ 08/20 #68 PMNT RCVD 1INFINITELOOP@APP 68 CA', 98.5), ('1INFINITELOOP@ 08/19 #68 PMNT RCVD 1INFINITELOOP@APP 68 CA', 59.1), ('1INFINITELOOP@ 08/13 #68 PMNT
+Error 2: Error processing query: 'top_k'
 
 Question 3: How much did Julia Johnson spend last week?
+Error 3: Error processing query: 'top_k'
 
-Question 4: What is the amount Julia Johnson have spent on Uber in the last 5 months?
+Question 4: How much did clnt_id=6 spend last week?
+Error 4: Error processing query: 'top_k'
 
-Time Taken: 00:25:30
+Question 5: What is the amount Julia Johnson have spent on Uber in the last 5 months?
+Error 5: Error processing query: 'top_k'
+
+Time Taken: 00:00:00
