@@ -60,7 +60,7 @@ Answer: Final answer here
 
 """
 
-SQLITE_PROMPT = PromptTemplate(
+DEFAULT_SQLITE_PROMPT = PromptTemplate(
     input_variables=["input", "table_info", "top_k"],
     template=_sqlite_prompt1 + PROMPT_SUFFIX,
 )

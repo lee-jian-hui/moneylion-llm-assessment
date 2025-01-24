@@ -8,6 +8,7 @@ python -m main --benchmark  # benchmark against a list of pre-defined questions
 python -m main # normal run as though talking to the chatbot until you type "exit"
 
 FUTURE IMPROVEMENTS:
+TODO: implement a mechanism to ask user to wait while tokens are getting processed in terms of a non-streaming implementation
 TODO: add arguments support so the script behavior can be determined by user 
 
 TODO: simulate a system given a client id to:
@@ -28,7 +29,17 @@ TODO: the benchmark function into an e2e test to cover random user inputs as wel
 TODO: streaming tokens as an option
 TODO: hook up an open source GUI that allows upload of csv files and auto conversion into databases ready to be processed and talked to by the LLM (or other relevant data connectors)
 TODO: create a function that downloads and/or post-download-verification across a list of provided model names from hugging face or from locally avaialble .gguf models
-TODO: ability to customise further on LLM parameters loaded by llama-cpp
+
+TODO: ability to customise further on LLM parameters loaded by llama-cpp:
+llama_new_context_with_model: n_seq_max     = 1
+llama_new_context_with_model: n_ctx         = 32768
+llama_new_context_with_model: n_ctx_per_seq = 32768
+llama_new_context_with_model: n_batch       = 512
+llama_new_context_with_model: n_ubatch      = 512
+llama_new_context_with_model: flash_attn    = 0
+llama_new_context_with_model: freq_base     = 10000.0
+llama_new_context_with_model: freq_scale    = 1
+
 TODO: find out how to use ollama to try out deepseek's reasoning model
 """
 
@@ -50,39 +61,19 @@ from langchain.llms.base import LLM
 from langchain.prompts import BasePromptTemplate, PromptTemplate
 
 from classes import GracefulSQLDatabaseChain
-from myprompts import SQLITE_PROMPT
+from mydatabase import initialize_database
+from myprompts import DEFAULT_SQLITE_PROMPT
 from utils import BenchmarkReport, setup_logger, truncate_conversation_history
 from myprompts import prompt_template_generator, _sqlite_prompt1, _sqlite_prompt2, _sqlite_prompt3
 import myprompts
+from configs import DATABASE_URL, DEFAULT_CHAT_OUTPUT_FILEPATH, DEFAULT_MODEL_PATH
 
-DEFAULT_MODEL_PATH = "./models/mistral-7b-instruct-v0.1.Q4_K_M.gguf"
-DATABASE_URL = "sqlite:///data.db" 
-MAX_TOKENS = 200
-TEMPERATURE = 0.4
-DEFAULT_CONTEXT_WINDOW_SIZE=8000 # TODO: let this be specified in argvs 
+
+DEFAULT_MAX_TOKENS = 200
+DEFAULT_TEMPERATURE=0.4
+DEFAULT_CONTEXT_WINDOW_SIZE=4096 # TODO: let this be specified in argvs 
 ALLOWED_WINDOW_SIZES=[2000,4000,8000,16000]
-# CONTEXT_WINDOW_SIZE=32768
-# CONTEXT_WINDOW_SIZE=4096
-
-
 logger = setup_logger(__name__, "main.log", level=logging.INFO)
-
-
-
-""" 
-# TODO: enable to customise all parameters for:
-
-llama_new_context_with_model: n_seq_max     = 1
-llama_new_context_with_model: n_ctx         = 32768
-llama_new_context_with_model: n_ctx_per_seq = 32768
-llama_new_context_with_model: n_batch       = 512
-llama_new_context_with_model: n_ubatch      = 512
-llama_new_context_with_model: flash_attn    = 0
-llama_new_context_with_model: freq_base     = 10000.0
-llama_new_context_with_model: freq_scale    = 1
-"""
-# REF: https://python.langchain.com/docs/how_to/custom_llm/
-# Custom LLM Wrapper for llama_cpp
 
 
 
@@ -122,8 +113,10 @@ def load_local_model(
         logger.info(f"Error loading model: {e}")
         return None
 
-DEFAULT_MAX_TOKENS = 200
-DEFAULT_TEMPERATURE=0.4
+
+# REF: https://python.langchain.com/docs/how_to/custom_llm/
+# Custom LLM Wrapper for llama_cpp
+
 class CustomLlamaLLM(LLM):
     def __init__(
         self,
@@ -188,7 +181,7 @@ def create_llm_chain(
     database: SQLDatabase, 
     llm: CustomLlamaLLM, 
     prompt: Optional[BasePromptTemplate] = None,
-    database_chain_cls: Union[SQLDatabaseChain, SQLDatabaseSequentialChain]=GracefulSQLDatabaseChain,
+    database_chain_cls: Type[Union[SQLDatabaseChain, SQLDatabaseSequentialChain]]=GracefulSQLDatabaseChain,
 ) -> Union[SQLDatabaseChain, SQLDatabaseSequentialChain]:
     try:
         db_chain = database_chain_cls.from_llm(llm=llm, db=database, prompt=prompt, verbose=True)
@@ -234,19 +227,25 @@ def chat_loop(
 
     if simulated and questions:
         for question in questions:
+            question = question.strip()  # Normalize input
             print(f"\nYour Query: {question}")
+            logger.info(f"Simulated Query: {question}")
             try:
                 # Update conversation history
                 conversation_history += f"User: {question}\n"
 
-                # Truncate conversation history if needed
-                conversation_history = truncate_conversation_history(
-                    conversation_history, 
-                    max_tokens_for_history
-                )
+                # # Truncate conversation history if needed
+                # conversation_history = truncate_conversation_history(
+                #     conversation_history, 
+                #     max_tokens_for_history
+                # )
+                # logger.info(f"\n\nconversation_history:\n{conversation_history}\n\n")
+
+                # Prepare full prompt and log it
+                full_prompt = prompt_template.template + "\n\n" + conversation_history
+                logger.info(f"Full Prompt Passed to LLM:\n{full_prompt}")
 
                 # Run query
-                full_prompt = prompt_template.template + "\n\n" + conversation_history
                 response = llm_chain.run(full_prompt)
 
                 # Log response
@@ -259,11 +258,14 @@ def chat_loop(
             except Exception as e:
                 error_message = f"Error processing query: {e}"
                 print(error_message)
+                logger.error(error_message)
                 if report:
                     report.add_error(question, error_message)
     else:
         while True:
-            user_input = input("\nYour Query: ").strip()
+            user_input = input("\nYour Query: ").strip()  # Normalize user input
+            logger.info(f"User Query Received: {user_input}")
+
             if user_input.lower() == "exit":
                 print("Goodbye!")
                 break
@@ -273,13 +275,16 @@ def chat_loop(
                 conversation_history += f"User: {user_input}\n"
 
                 # Truncate conversation history if needed
-                conversation_history = truncate_conversation_history(
-                    conversation_history, 
-                    max_tokens_for_history
-                )
+                # conversation_history = truncate_conversation_history(
+                #     conversation_history, 
+                #     max_tokens_for_history
+                # )
+
+                # Prepare full prompt and log it
+                full_prompt = prompt_template.template + "\n\n" + conversation_history
+                logger.info(f"Full Prompt Passed to LLM:\n{full_prompt}")
 
                 # Run query
-                full_prompt = prompt_template.template + "\n\n" + conversation_history
                 response = llm_chain.run(full_prompt)
 
                 # Log response
@@ -287,14 +292,14 @@ def chat_loop(
                 print("\nQuery Result:")
                 print(response)
             except Exception as e:
-                print(f"Error processing query: {e}")
+                error_message = f"Error processing query: {e}"
+                print(error_message)
+                logger.error(error_message)
 
     # Save benchmark results if applicable
     if report and output_file:
         report.save_to_file(output_file)
         logger.info(f"Benchmark results saved to {output_file}")
-
-
 
 
 def test_database_context(sql_llm_chain: Union[SQLDatabaseChain, SQLDatabaseSequentialChain], database: SQLDatabase):
@@ -383,7 +388,7 @@ def build_llama_llm(
     model_path: str = DEFAULT_MODEL_PATH, 
     context_window_size: int=DEFAULT_CONTEXT_WINDOW_SIZE,
     temperature: float = DEFAULT_TEMPERATURE,
-    max_tokens: float = MAX_TOKENS,
+    max_tokens: float = DEFAULT_MAX_TOKENS,
 ) -> Optional[CustomLlamaLLM]:
     model = load_local_model(model_path=model_path, context_window_size=context_window_size)
     if not model:
@@ -408,13 +413,13 @@ def build_llm_chain(
         return
 
     # Create the banking assistant
-    sql_llm_chain = create_llm_chain(database=database, llm=llama_llm, prompt=prompt)
+    sql_llm_chain = create_llm_chain(database=database, llm=llama_llm, prompt=prompt, database_chain_cls=sql_chain_cls)
     if not sql_llm_chain:
         logger.error("Failed to create SQL LLM chain.")
         return
     
     # overwrite prompt template
-    sql_llm_chain.llm_chain.prompt = SQLITE_PROMPT
+    sql_llm_chain.llm_chain.prompt = DEFAULT_SQLITE_PROMPT
 
     return sql_llm_chain
 
@@ -445,12 +450,21 @@ def benchmark_run() -> None:
 
 def main_run_loop():
     # choose sqllite prompt 3 from my prompt
-    sql_llm_chain = build_llm_chain()
-    chat_loop(sql_llm_chain, simulated=False)
-
+    context_window_size = DEFAULT_CONTEXT_WINDOW_SIZE
+    llama_llm = build_llama_llm(context_window_size=context_window_size)
+    sql_llm_chain = build_llm_chain(llama_llm, prompt=DEFAULT_SQLITE_PROMPT, sql_chain_cls=SQLDatabaseChain)
+    chat_loop(
+        llm_chain=sql_llm_chain, 
+        prompt_template=DEFAULT_SQLITE_PROMPT,
+        max_tokens_for_history=context_window_size - len(DEFAULT_SQLITE_PROMPT.template.split()),
+        simulated=False,
+        output_file=DEFAULT_CHAT_OUTPUT_FILEPATH
+    )
 
 
 if __name__ == "__main__":
+    # Initialize the SQLite database
+    initialize_database()
     # Test the database context
     # test_database_context(sql_llm_chain, database)
 
@@ -460,4 +474,4 @@ if __name__ == "__main__":
 
 
     benchmark_run()
-    main_run_loop()
+    # main_run_loop()

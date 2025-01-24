@@ -2,6 +2,7 @@ import logging
 import psutil
 import torch
 from langchain.prompts import PromptTemplate
+import time
 
 
 def setup_logger(name: str, log_file: str = "main.log", level: int = logging.DEBUG):
@@ -120,13 +121,6 @@ def extend_prompt_template(base_template: PromptTemplate, additional_context: st
     return extended_template
 
 
-logger = setup_logger("utils", level=logging.INFO)
-logger.info(f"get_device: {get_device()}")
-
-
-
-
-import time
 
 class BenchmarkReport:
     def __init__(self, context_window_size: int, prompt_template: str):
@@ -171,3 +165,7 @@ class BenchmarkReport:
     def save_to_file(self, output_file: str):
         with open(output_file, "w") as file:
             file.write(self.generate_report())
+
+
+logger = setup_logger("utils", level=logging.INFO)
+logger.info(f"get_device: {get_device()}")
