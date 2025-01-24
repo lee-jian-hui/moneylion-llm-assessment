@@ -8,7 +8,6 @@ python -m main --benchmark  # benchmark against a list of pre-defined questions
 python -m main # normal run as though talking to the chatbot until you type "exit"
 
 FUTURE IMPROVEMENTS:
-TODO: implement a mechanism to ask user to wait while tokens are getting processed in terms of a non-streaming implementation
 TODO: add arguments support so the script behavior can be determined by user 
 
 TODO: simulate a system given a client id to:
@@ -21,6 +20,7 @@ TODO: given a user name tied to client id (assume another new table storing this
 3. categorize merchants under entertainment, food, etc.
 
 
+TODO: implement a mechanism to ask user to wait while tokens are getting processed in terms of a non-streaming implementation
 TODO: make gracefully failure SQLLLM CHAIN more robust with more variance and configs to the retry mechanism
 TODO: think about other actions besides SQL querying, can we update the database maybe?
 TODO: is it possible for a dynamic max token for the model?
@@ -64,7 +64,7 @@ from pydantic import Field
 from classes import GracefulSQLDatabaseChain
 from mydatabase import initialize_database
 from utils import BenchmarkReport, setup_logger, truncate_conversation_history
-from myprompts import DEFAULT_SQLITE_PROMPT, prompt_template_generator, _sqlite_prompt1, _sqlite_prompt2, _sqlite_prompt3
+from myprompts import ALL_PROMPT_STRINGS, DEFAULT_SQLITE_PROMPT, prompt_template_generator, _sqlite_prompt1, _sqlite_prompt2, _sqlite_prompt3
 import myprompts
 from configs import DATABASE_PATH, DATABASE_URL, DEFAULT_CHAT_OUTPUT_FILEPATH, DEFAULT_MODEL_PATH
 
@@ -78,16 +78,14 @@ logger = setup_logger(__name__, "main.log", level=logging.INFO)
 
 
 
-# TODO: RnD on this
-# Mock BaseCache implementation
+# TODO: Could implement caching for production in the far future
+# Mock Caching, disabled
 class SimpleCache(BaseCache):
     def lookup(self, *args: Any, **kwargs: Any) -> Any:
         return None
 
     def update(self, *args: Any, **kwargs: Any) -> None:
         pass
-
-
 # Ensure SQLDatabaseChain is fully defined
 SQLDatabaseChain.model_rebuild()
 
@@ -436,11 +434,7 @@ def benchmark_run() -> None:
     # Define models, context sizes, and prompts for benchmarking
     model_paths = ["./models/mistral-7b-instruct-v0.1.Q4_K_M.gguf"]
     context_sizes = ALLOWED_WINDOW_SIZES
-    prompt_templates = [
-        prompt_template_generator(_sqlite_prompt1),
-        prompt_template_generator(_sqlite_prompt2),
-        prompt_template_generator(_sqlite_prompt3),
-    ]
+    prompt_templates = [prompt_template_generator(prompt_str) for prompt_str in ALL_PROMPT_STRINGS]
     question_set = [
         "How many rows are in the 'transactions' table?",
         "Can you filter for transactions with merchant '1INFINITE'?",
