@@ -1,4 +1,5 @@
 import logging
+import os
 import psutil
 import torch
 from langchain.prompts import PromptTemplate
@@ -162,7 +163,19 @@ class BenchmarkReport:
         report_lines.append(f"Time Taken: {total_time}")
         return "\n".join(report_lines)
 
+
+    def _ensure_directory_exists(self, directory: str):
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+
     def save_to_file(self, output_file: str):
+        # Extract the directory from the output file path
+        directory = os.path.dirname(output_file)
+
+        # Ensure the directory exists
+        self._ensure_directory_exists(directory)
+
+        # Write the report to the file
         with open(output_file, "w") as file:
             file.write(self.generate_report())
 

@@ -1,0 +1,1 @@
+this is a run for mistral-7b quantized model across different context window sizes with two tables: transactions and clients table in the database
