@@ -59,14 +59,14 @@ from langchain.sql_database import SQLDatabase
 from langchain.schema import BaseOutputParser
 from langchain.llms.base import LLM
 from langchain.prompts import BasePromptTemplate, PromptTemplate
+from pydantic import Field
 
 from classes import GracefulSQLDatabaseChain
 from mydatabase import initialize_database
-from myprompts import DEFAULT_SQLITE_PROMPT
 from utils import BenchmarkReport, setup_logger, truncate_conversation_history
-from myprompts import prompt_template_generator, _sqlite_prompt1, _sqlite_prompt2, _sqlite_prompt3
+from myprompts import DEFAULT_SQLITE_PROMPT, prompt_template_generator, _sqlite_prompt1, _sqlite_prompt2, _sqlite_prompt3
 import myprompts
-from configs import DATABASE_URL, DEFAULT_CHAT_OUTPUT_FILEPATH, DEFAULT_MODEL_PATH
+from configs import DATABASE_PATH, DATABASE_URL, DEFAULT_CHAT_OUTPUT_FILEPATH, DEFAULT_MODEL_PATH
 
 
 DEFAULT_MAX_TOKENS = 200
@@ -118,9 +118,12 @@ def load_local_model(
 # Custom LLM Wrapper for llama_cpp
 
 class CustomLlamaLLM(LLM):
+    context_window_size: int = Field(default=DEFAULT_CONTEXT_WINDOW_SIZE, description="Maximum context window size.")
+
     def __init__(
         self,
         model: Llama, 
+        context_window_size: int,
         max_tokens: int = DEFAULT_MAX_TOKENS, 
         temperature: float = DEFAULT_TEMPERATURE
     ):
@@ -132,6 +135,7 @@ class CustomLlamaLLM(LLM):
         """
         super().__init__()
         self._model = model
+        self.context_window_size = context_window_size
         self._max_tokens = max_tokens
         self._temperature = temperature
 
@@ -340,6 +344,7 @@ def benchmark_models_with_contexts(
     context_window_sizes: List[int],
     prompt_templates: List[PromptTemplate],
     question_set: List[str],
+    llm_chain_cls: Type[SQLDatabaseChain | SQLDatabaseSequentialChain],
     output_dir: str = "./benchmark_results",
 ) -> None:
     """
@@ -364,7 +369,8 @@ def benchmark_models_with_contexts(
 
             for idx, prompt_template in enumerate(prompt_templates, 1):
                 # NOTE: rebuild LLM chain by swapping out prompt template witohut rebuilding llama_llm instance
-                llm_chain = build_llm_chain(llama_llm=llama_llm, prompt=prompt_template)
+                llm_chain = build_llm_chain(llama_llm=llama_llm, prompt=prompt_template, sql_chain_cls=llm_chain_cls)
+                
                 output_file = os.path.join(
                     output_dir, 
                     f"benchmark_model_{os.path.basename(model_path).split('.')[0]}_"
@@ -394,7 +400,7 @@ def build_llama_llm(
     if not model:
         logger.error("Model failed to load.")
         return
-    return CustomLlamaLLM(model, max_tokens=max_tokens, temperature=temperature)
+    return CustomLlamaLLM(model, context_window_size=context_window_size, max_tokens=max_tokens, temperature=temperature)
 
 
 
@@ -403,7 +409,7 @@ def build_llm_chain(
         llama_llm: CustomLlamaLLM,
         prompt: Optional[BasePromptTemplate] = None,
         sql_chain_cls: Type[Union[SQLDatabaseChain, SQLDatabaseSequentialChain]] = GracefulSQLDatabaseChain,
-    ) -> Union[SQLDatabaseChain, SQLDatabaseSequentialChain]:
+    ) -> Optional[Union[SQLDatabaseChain, SQLDatabaseSequentialChain]]:
     # Load the model
 
     # Load the database connection
@@ -420,6 +426,8 @@ def build_llm_chain(
     
     # overwrite prompt template
     sql_llm_chain.llm_chain.prompt = DEFAULT_SQLITE_PROMPT
+
+    logger.info(f"New LLMCHAIN: [WINDOW_SIZE: {llama_llm._model._n_ctx}, MAX_TOKENS:{llama_llm._max_tokens}, TEMPERATURE: {llama_llm._temperature}]")
 
     return sql_llm_chain
 
@@ -445,7 +453,8 @@ def benchmark_run() -> None:
         model_paths, 
         context_sizes, 
         prompt_templates, 
-        question_set
+        question_set,
+        llm_chain_cls=SQLDatabaseChain
     )
 
 def main_run_loop():
@@ -463,11 +472,15 @@ def main_run_loop():
 
 
 if __name__ == "__main__":
-    # Initialize the SQLite database
+    # Check if the database file exists and delete it
+    if os.path.exists(DATABASE_PATH):
+        os.remove(DATABASE_PATH)
+        print(f"Existing database '{DATABASE_PATH}' has been deleted.")
+    # Reinitialize the database
     initialize_database()
+
     # Test the database context
     # test_database_context(sql_llm_chain, database)
-
 
     # TODO: add the ability to parse arugment here, e.g. --simulated --benchmark, 
     # both must be mutually exclusive, if no flags passed here this is a non-simulated run

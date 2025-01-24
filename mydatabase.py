@@ -2,13 +2,14 @@ import logging
 import os
 import pandas as pd
 from sqlalchemy import (
-    create_engine, Column, Integer, String, Float, Date, MetaData, Table
+    DateTime, create_engine, Column, Integer, String, Float, Date, MetaData, Table
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from utils import setup_logger
 from dotenv import load_dotenv
 from configs import DATABASE_PATH, DATABASE_URL, TRANSACTION_CSV, CLIENT_INFO_CSV
+from datetime import datetime   
 
 
 
@@ -28,7 +29,7 @@ class Transaction(Base):
     bank_id = Column(Integer, nullable=False)
     acc_id = Column(Integer, nullable=False)
     txn_id = Column(Integer, nullable=False)
-    txn_date = Column(Date, nullable=False)
+    txn_date = Column(DateTime, nullable=False)
     desc = Column(String, nullable=True)
     amt = Column(Float, nullable=False)
     cat = Column(String, nullable=True)
@@ -67,10 +68,6 @@ class SQLiteDB:
         # Create all tables
         Base.metadata.create_all(self.engine)
 
-    from datetime import datetime
-
-class SQLiteDB:
-    # Other methods remain unchanged...
 
     def load_csv_to_table(self, csv_file: str, table_name: str):
         """
@@ -86,12 +83,13 @@ class SQLiteDB:
         # Read the CSV file
         df = pd.read_csv(csv_file)
 
-        # Convert `txn_date` to ISO format if the table is `transactions`
+        # Convert txn_date to ISO 8601 format if the table is transactions
         if table_name == "transactions" and "txn_date" in df.columns:
             try:
+                # Ensure proper datetime conversion to preserve both date and time
                 df["txn_date"] = pd.to_datetime(
                     df["txn_date"], format="%d/%m/%Y %H:%M"
-                ).dt.strftime("%Y-%m-%d %H:%M:%S")
+                ).dt.strftime('%Y-%m-%d %H:%M:%S')  # Convert to ISO 8601 format with time
             except Exception as e:
                 raise ValueError(f"Error converting txn_date: {e}")
 
@@ -105,40 +103,40 @@ class SQLiteDB:
         print(f"Data from {csv_file} has been successfully loaded into '{table_name}' table.")
 
 
-    def query_table(self, table_name: str):
-        """
-        Query all data from a table.
+        def query_table(self, table_name: str):
+            """
+            Query all data from a table.
 
-        Args:
-            table_name (str): The name of the table to query.
+            Args:
+                table_name (str): The name of the table to query.
 
-        Returns:
-            List of rows from the table.
-        """
-        if table_name not in Base.metadata.tables:
-            raise ValueError(f"Table '{table_name}' does not exist in the database schema.")
+            Returns:
+                List of rows from the table.
+            """
+            if table_name not in Base.metadata.tables:
+                raise ValueError(f"Table '{table_name}' does not exist in the database schema.")
 
-        with self.Session() as session:
+            with self.Session() as session:
+                table = Base.metadata.tables[table_name]
+                result = session.query(table).all()
+            return result
+
+        def get_schema(self, table_name: str):
+            """
+            Retrieve schema information for a given table.
+
+            Args:
+                table_name (str): The name of the table.
+
+            Returns:
+                List of column names and types.
+            """
+            if table_name not in Base.metadata.tables:
+                raise ValueError(f"Table '{table_name}' does not exist in the database schema.")
+
             table = Base.metadata.tables[table_name]
-            result = session.query(table).all()
-        return result
-
-    def get_schema(self, table_name: str):
-        """
-        Retrieve schema information for a given table.
-
-        Args:
-            table_name (str): The name of the table.
-
-        Returns:
-            List of column names and types.
-        """
-        if table_name not in Base.metadata.tables:
-            raise ValueError(f"Table '{table_name}' does not exist in the database schema.")
-
-        table = Base.metadata.tables[table_name]
-        schema = [(col.name, str(col.type)) for col in table.columns]
-        return schema
+            schema = [(col.name, str(col.type)) for col in table.columns]
+            return schema
 
 
 def initialize_database(db_path: str = DATABASE_PATH, transaction_csv: str = TRANSACTION_CSV, client_csv: str = CLIENT_INFO_CSV):
@@ -165,3 +163,9 @@ def initialize_database(db_path: str = DATABASE_PATH, transaction_csv: str = TRA
         logger.info(f"Loaded data from {client_csv} into 'clients' table.")
     except Exception as e:
         logger.error(f"Error loading client info CSV: {e}")
+
+
+
+if __name__ == "__main__":
+    sqlite_db = SQLiteDB()
+    sqlite_db.load_csv_to_table("test_transactions.csv", "transactions")
