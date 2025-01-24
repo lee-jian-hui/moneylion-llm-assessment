@@ -27,6 +27,8 @@ INTERMEDIATE_STEPS_KEY = "intermediate_steps"
 SQL_QUERY = "SQLQuery:"
 SQL_RESULT = "SQLResult:"
 
+
+# NOTE: the behvaiour is not robust yet, so more modifications are necessary
 class GracefulSQLDatabaseChain(SQLDatabaseChain):
     """A database chain that gracefully handles invalid SQL queries."""
 

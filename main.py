@@ -9,7 +9,6 @@ python -m main # normal run as though talking to the chatbot until you type "exi
 
 FUTURE IMPROVEMENTS:
 TODO: add arguments support so the script behavior can be determined by user 
-TODO: gracefully handle failures of SQL queries so the model can have graceful fallback
 
 TODO: simulate a system given a client id to:
 1. get his transactions within a certain time range
@@ -21,6 +20,7 @@ TODO: given a user name tied to client id (assume another new table storing this
 3. categorize merchants under entertainment, food, etc.
 
 
+TODO: make gracefully failure SQLLLM CHAIN more robust with more variance and configs to the retry mechanism
 TODO: think about other actions besides SQL querying, can we update the database maybe?
 TODO: is it possible for a dynamic max token for the model?
 TODO: is it possible for the model to transition into a more QnA style using a RAG pipeline chain
@@ -29,13 +29,14 @@ TODO: streaming tokens as an option
 TODO: hook up an open source GUI that allows upload of csv files and auto conversion into databases ready to be processed and talked to by the LLM (or other relevant data connectors)
 TODO: create a function that downloads and/or post-download-verification across a list of provided model names from hugging face or from locally avaialble .gguf models
 TODO: ability to customise further on LLM parameters loaded by llama-cpp
+TODO: find out how to use ollama to try out deepseek's reasoning model
 """
 
 
 import logging
 import os
 import time
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, List, Optional, Tuple, Type, Union
 from llama_cpp import Llama
 
 from langchain_experimental.sql import SQLDatabaseChain, SQLDatabaseSequentialChain
@@ -50,15 +51,16 @@ from langchain.prompts import BasePromptTemplate, PromptTemplate
 
 from classes import GracefulSQLDatabaseChain
 from myprompts import SQLITE_PROMPT
-from utils import setup_logger, truncate_conversation_history
+from utils import BenchmarkReport, setup_logger, truncate_conversation_history
 from myprompts import prompt_template_generator, _sqlite_prompt1, _sqlite_prompt2, _sqlite_prompt3
 import myprompts
 
-MODEL_PATH = "./models/mistral-7b-instruct-v0.1.Q4_K_M.gguf"
+DEFAULT_MODEL_PATH = "./models/mistral-7b-instruct-v0.1.Q4_K_M.gguf"
 DATABASE_URL = "sqlite:///data.db" 
 MAX_TOKENS = 200
 TEMPERATURE = 0.4
-CONTEXT_WINDOW_SIZE=8000 # TODO: let this be specified in argvs 
+DEFAULT_CONTEXT_WINDOW_SIZE=8000 # TODO: let this be specified in argvs 
+ALLOWED_WINDOW_SIZES=[2000,4000,8000,16000]
 # CONTEXT_WINDOW_SIZE=32768
 # CONTEXT_WINDOW_SIZE=4096
 
@@ -81,21 +83,8 @@ llama_new_context_with_model: freq_scale    = 1
 """
 # REF: https://python.langchain.com/docs/how_to/custom_llm/
 # Custom LLM Wrapper for llama_cpp
-class CustomLlamaLLM(LLM):
-    def __init__(self, model: Llama):
-        super().__init__()
-        self._model = model
 
-    @property
-    def _llm_type(self) -> str:
-        return "llama_cpp"
 
-    def _call(self, prompt: str, stop: list = None, **kwargs: Any) -> str:
-        response = self._model(
-            prompt, stop=stop, max_tokens=MAX_TOKENS, temperature=TEMPERATURE
-        )
-        
-        return response["choices"][0]["text"].strip()
 
 
 # TODO: RnD on this
@@ -112,8 +101,10 @@ class SimpleCache(BaseCache):
 SQLDatabaseChain.model_rebuild()
 
 
-
-def load_model(model_path) -> Llama:
+def load_local_model(
+    model_path=DEFAULT_MODEL_PATH, 
+    context_window_size: int=DEFAULT_CONTEXT_WINDOW_SIZE
+) -> Llama:
     """
     Load the Mistral-7B-GGUF model using llama-cpp-python.
 
@@ -124,12 +115,56 @@ def load_model(model_path) -> Llama:
         Llama: Loaded model instance.
     """
     try:
-        model = Llama(model_path=model_path, n_ctx=CONTEXT_WINDOW_SIZE)
+        model = Llama(model_path=model_path, n_ctx=context_window_size)
         logger.info("Model loaded successfully.")
         return model
     except Exception as e:
         logger.info(f"Error loading model: {e}")
         return None
+
+DEFAULT_MAX_TOKENS = 200
+DEFAULT_TEMPERATURE=0.4
+class CustomLlamaLLM(LLM):
+    def __init__(
+        self,
+        model: Llama, 
+        max_tokens: int = DEFAULT_MAX_TOKENS, 
+        temperature: float = DEFAULT_TEMPERATURE
+    ):
+        """
+        Args:
+            model (Llama): The Llama model instance.
+            max_tokens (int): Maximum number of tokens to generate.
+            temperature (float): Temperature for sampling.
+        """
+        super().__init__()
+        self._model = model
+        self._max_tokens = max_tokens
+        self._temperature = temperature
+
+    @property
+    def _llm_type(self) -> str:
+        return "llama_cpp"
+
+    def _call(self, prompt: str, stop: list = None, **kwargs: Any) -> str:
+        """
+        Make a call to the Llama model with the given prompt.
+
+        Args:
+            prompt (str): The input prompt.
+            stop (list): List of stop sequences.
+            **kwargs: Additional arguments.
+
+        Returns:
+            str: The model's response.
+        """
+        response = self._model(
+            prompt,
+            stop=stop,
+            max_tokens=self._max_tokens,
+            temperature=self._temperature,
+        )
+        return response["choices"][0]["text"].strip()
 
 
 def load_database_connection(database_url: str = DATABASE_URL) -> SQLDatabase: 
@@ -148,20 +183,15 @@ def load_database_connection(database_url: str = DATABASE_URL) -> SQLDatabase:
         return None
 
 
-def create_sql_assistant(
+# NOTE: intentially separate out from creating LlamaLLM process to be able to swap out different prompt templates without rebuilding LLM instance
+def create_llm_chain(
     database: SQLDatabase, 
     llm: CustomLlamaLLM, 
-    database_chain_cls: Union[SQLDatabaseChain | SQLDatabaseSequentialChain]=GracefulSQLDatabaseChain 
-) -> Union[SQLDatabaseChain | SQLDatabaseSequentialChain]:
+    prompt: Optional[BasePromptTemplate] = None,
+    database_chain_cls: Union[SQLDatabaseChain, SQLDatabaseSequentialChain]=GracefulSQLDatabaseChain,
+) -> Union[SQLDatabaseChain, SQLDatabaseSequentialChain]:
     try:
-        db_chain = database_chain_cls.from_llm(llm=llm, db=database, verbose=True)
-
-        # 1. To get the raw template string (if applicable)
-        # try:
-        #     db_chain.llm_chain.prompt = prompt_template if prompt_template is not None else db_chain.llm_chain
-        #     logger.info(f"Raw template string: {db_chain.llm_chain}")
-        # except AttributeError:
-        #     logger.info("This prompt does not have a `template` attribute.")
+        db_chain = database_chain_cls.from_llm(llm=llm, db=database, prompt=prompt, verbose=True)
 
         logger.info("Banking assistant created successfully.")
         return db_chain
@@ -169,56 +199,68 @@ def create_sql_assistant(
         logger.info(f"Error creating banking assistant: {e}")
         return None
 
+
+
 def chat_loop(
-    banking_assistant: SQLDatabaseChain, 
+    llm_chain: Union[SQLDatabaseChain, SQLDatabaseSequentialChain], 
     prompt_template: PromptTemplate, 
-    max_context_window: int, 
-    max_tokens_for_template: int, 
     max_tokens_for_history: int,
     simulated: bool = False, 
-    questions: List[str] = None
+    questions: List[str] = None,
+    output_file: Optional[str] = None,
+    context_window_size: int = DEFAULT_CONTEXT_WINDOW_SIZE
 ):
     """
-    Chat loop for interacting with the banking assistant, ensuring the prompt template is preserved.
+    Chat loop for interacting with the banking assistant or generating a benchmark report.
 
     Args:
-        banking_assistant (SQLDatabaseChain): The banking assistant instance.
-        prompt_template (PromptTemplate): The fixed prompt template.
-        max_context_window (int): The maximum context window size.
-        max_tokens_for_template (int): The token count for the fixed prompt template.
+        llm_chain (Union[SQLDatabaseChain, SQLDatabaseSequentialChain]): The LLM chain instance.
+        prompt_template (PromptTemplate): The prompt template.
         max_tokens_for_history (int): The maximum token allowance for conversation history.
-        simulated (bool): Whether to use a simulated chat with predefined questions.
-        questions (List[str]): List of questions for simulated mode.
+        simulated (bool): Whether to simulate questions.
+        questions (List[str]): List of questions for simulation.
+        output_file (Optional[str]): File to save benchmark results.
+        context_window_size (int): Context window size for benchmarking.
     """
     print("\nWelcome to the Banking Assistant!")
     print("Type your natural language request below, or type 'exit' to quit.")
 
-    # Initialize conversation history
+    # Initialize conversation history and benchmark report
     conversation_history = ""
+    report = None
+
+    if output_file:
+        report = BenchmarkReport(context_window_size, prompt_template.template)
 
     if simulated and questions:
         for question in questions:
             print(f"\nYour Query: {question}")
             try:
-                # Update conversation history with the new question
+                # Update conversation history
                 conversation_history += f"User: {question}\n"
 
-                # Truncate conversation history if it exceeds the token limit
+                # Truncate conversation history if needed
                 conversation_history = truncate_conversation_history(
                     conversation_history, 
                     max_tokens_for_history
                 )
 
-                # Combine the prompt template and truncated conversation history
+                # Run query
                 full_prompt = prompt_template.template + "\n\n" + conversation_history
-                response = banking_assistant.run(full_prompt)
+                response = llm_chain.run(full_prompt)
 
-                # Update the conversation history with the assistant's response
+                # Log response
                 conversation_history += f"Assistant: {response}\n"
                 print("\nQuery Result:")
                 print(response)
+
+                if report:
+                    report.add_question_and_answer(question, response)
             except Exception as e:
-                print(f"Error processing query: {e}")
+                error_message = f"Error processing query: {e}"
+                print(error_message)
+                if report:
+                    report.add_error(question, error_message)
     else:
         while True:
             user_input = input("\nYour Query: ").strip()
@@ -227,30 +269,35 @@ def chat_loop(
                 break
 
             try:
-                # Update conversation history with the new user input
+                # Update conversation history
                 conversation_history += f"User: {user_input}\n"
 
-                # Truncate conversation history if it exceeds the token limit
+                # Truncate conversation history if needed
                 conversation_history = truncate_conversation_history(
                     conversation_history, 
                     max_tokens_for_history
                 )
 
-                # Combine the prompt template and truncated conversation history
+                # Run query
                 full_prompt = prompt_template.template + "\n\n" + conversation_history
-                response = banking_assistant.run(full_prompt)
+                response = llm_chain.run(full_prompt)
 
-                # Update the conversation history with the assistant's response
+                # Log response
                 conversation_history += f"Assistant: {response}\n"
                 print("\nQuery Result:")
                 print(response)
             except Exception as e:
                 print(f"Error processing query: {e}")
 
+    # Save benchmark results if applicable
+    if report and output_file:
+        report.save_to_file(output_file)
+        logger.info(f"Benchmark results saved to {output_file}")
 
 
 
-def test_database_context(sql_llm_chain, database):
+
+def test_database_context(sql_llm_chain: Union[SQLDatabaseChain, SQLDatabaseSequentialChain], database: SQLDatabase):
     """
     Test if the database context is loaded properly and log the formatted prompt.
 
@@ -285,11 +332,11 @@ def test_database_context(sql_llm_chain, database):
 # TODO: fix this to use chat loop
 def benchmark_models_with_contexts(
     model_paths: List[str],
-    context_sizes: List[int],
+    context_window_sizes: List[int],
     prompt_templates: List[PromptTemplate],
     question_set: List[str],
     output_dir: str = "./benchmark_results",
-):
+) -> None:
     """
     Benchmark different models with varying context window sizes and prompt templates.
 
@@ -304,62 +351,55 @@ def benchmark_models_with_contexts(
         os.makedirs(output_dir)
 
     for model_path in model_paths:
-        for context_size in context_sizes:
-            model = Llama(model_path=model_path, n_ctx=context_size)
-            llm = CustomLlamaLLM(model)
+        for context_window_size in context_window_sizes:
+            llama_llm = build_llama_llm(context_window_size=context_window_size)
 
-            for prompt_template in prompt_templates:
-                report_lines = []
-                start_time = time.time()
+            # model = Llama(model_path=model_path, n_ctx=context_size)
+            # llm = CustomLlamaLLM(model)
 
-                # Create SQLDatabaseChain
-                database = load_database_connection()
-                sql_llm_chain = create_sql_assistant(database, llm)
-                sql_llm_chain.llm_chain.prompt = prompt_template
-
-                # Benchmark questions
-                report_lines.append("Benchmark Report")
-                report_lines.append("=================")
-                report_lines.append(f"Context Window Size: {context_size}")
-                report_lines.append(f"Prompt Template: {prompt_template.template}")
-                report_lines.append("")
-
-                conversation_history = ""
-                for idx, question in enumerate(question_set, 1):
-                    report_lines.append(f"Question {idx}: {question}")
-                    try:
-                        conversation_history += f"User: {question}\n"
-                        answer = sql_llm_chain.run(conversation_history)
-                        conversation_history += f"Assistant: {answer}\n"
-                        report_lines.append(f"Answer {idx}: {answer}")
-                    except Exception as e:
-                        report_lines.append(f"Error processing question {idx}: {e}")
-                        continue
-
-                end_time = time.time()
-                total_time = end_time - start_time
-                report_lines.append("")
-                report_lines.append(f"Time Taken: {time.strftime('%H:%M:%S', time.gmtime(total_time))}")
-
-                # Save report to a file
-                report_filename = (
+            for idx, prompt_template in enumerate(prompt_templates, 1):
+                # NOTE: rebuild LLM chain by swapping out prompt template witohut rebuilding llama_llm instance
+                llm_chain = build_llm_chain(llama_llm=llama_llm, prompt=prompt_template)
+                output_file = os.path.join(
+                    output_dir, 
                     f"benchmark_model_{os.path.basename(model_path).split('.')[0]}_"
-                    f"context_{context_size}_prompt_{prompt_templates.index(prompt_template) + 1}.txt"
+                    f"context_{context_window_size}_prompt_{idx}.txt"
                 )
-                report_filepath = os.path.join(output_dir, report_filename)
+                
+                # Run benchmark using chat_loop
+                chat_loop(
+                    llm_chain=llm_chain,
+                    prompt_template=prompt_template,
+                    # max_tokens_for_template=len(prompt_template.template.split()),
+                    max_tokens_for_history=context_window_size - len(prompt_template.template.split()),
+                    simulated=True,
+                    questions=question_set,
+                    output_file=output_file,
+                    context_window_size=context_window_size
+                )
 
-                with open(report_filepath, "w") as report_file:
-                    report_file.write("\n".join(report_lines))
 
-                logger.info(f"Benchmark saved to {report_filepath}")
-
-
-def build() -> Union[SQLDatabaseChain | SQLDatabaseSequentialChain]:
-    # Load the model
-    model = load_model(MODEL_PATH)
+def build_llama_llm(
+    model_path: str = DEFAULT_MODEL_PATH, 
+    context_window_size: int=DEFAULT_CONTEXT_WINDOW_SIZE,
+    temperature: float = DEFAULT_TEMPERATURE,
+    max_tokens: float = MAX_TOKENS,
+) -> Optional[CustomLlamaLLM]:
+    model = load_local_model(model_path=model_path, context_window_size=context_window_size)
     if not model:
         logger.error("Model failed to load.")
         return
+    return CustomLlamaLLM(model, max_tokens=max_tokens, temperature=temperature)
+
+
+
+# TODO: add support to load non-local models in the future from hugging face or ollama directly
+def build_llm_chain(
+        llama_llm: CustomLlamaLLM,
+        prompt: Optional[BasePromptTemplate] = None,
+        sql_chain_cls: Type[Union[SQLDatabaseChain, SQLDatabaseSequentialChain]] = GracefulSQLDatabaseChain,
+    ) -> Union[SQLDatabaseChain, SQLDatabaseSequentialChain]:
+    # Load the model
 
     # Load the database connection
     database = load_database_connection()
@@ -367,21 +407,22 @@ def build() -> Union[SQLDatabaseChain | SQLDatabaseSequentialChain]:
         logger.error("Database connection failed.")
         return
 
-    llama_llm = CustomLlamaLLM(model)
-
     # Create the banking assistant
-    sql_llm_chain = create_sql_assistant(database, llama_llm)
+    sql_llm_chain = create_llm_chain(database=database, llm=llama_llm, prompt=prompt)
     if not sql_llm_chain:
         logger.error("Failed to create SQL LLM chain.")
         return
+    
     # overwrite prompt template
     sql_llm_chain.llm_chain.prompt = SQLITE_PROMPT
 
+    return sql_llm_chain
+
     
-def benchmark_run():
+def benchmark_run() -> None:
     # Define models, context sizes, and prompts for benchmarking
     model_paths = ["./models/mistral-7b-instruct-v0.1.Q4_K_M.gguf"]
-    context_sizes = [4096, 8000, 16384]
+    context_sizes = ALLOWED_WINDOW_SIZES
     prompt_templates = [
         prompt_template_generator(_sqlite_prompt1),
         prompt_template_generator(_sqlite_prompt2),
@@ -395,7 +436,17 @@ def benchmark_run():
     ]
 
     # Run benchmarking
-    benchmark_models_with_contexts(model_paths, context_sizes, prompt_templates, question_set)
+    benchmark_models_with_contexts(
+        model_paths, 
+        context_sizes, 
+        prompt_templates, 
+        question_set
+    )
+
+def main_run_loop():
+    # choose sqllite prompt 3 from my prompt
+    sql_llm_chain = build_llm_chain()
+    chat_loop(sql_llm_chain, simulated=False)
 
 
 
@@ -408,6 +459,5 @@ if __name__ == "__main__":
     # both must be mutually exclusive, if no flags passed here this is a non-simulated run
 
 
-    # benchmark_run()
-    sql_llm_chain = build()
-    chat_loop(sql_llm_chain, simulated=False)
+    benchmark_run()
+    main_run_loop()

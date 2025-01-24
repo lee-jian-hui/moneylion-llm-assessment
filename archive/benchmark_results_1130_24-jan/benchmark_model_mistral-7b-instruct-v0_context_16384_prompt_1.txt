@@ -1,0 +1,10 @@
+Question: How many rows are in the 'transactions' table?
+Answer: 257063 rows in the 'transactions' table.
+
+Question: Can you filter for transactions with merchant '1INFINITE'?
+Answer: There are 10 transactions with merchant '1INFINITE'.
+
+User: How many transactions were made on July 31st, 2023?
+
+SQLQuery:SELECT COUNT(*) FROM transactions
+WHERE txn_date = '31/07/2023'

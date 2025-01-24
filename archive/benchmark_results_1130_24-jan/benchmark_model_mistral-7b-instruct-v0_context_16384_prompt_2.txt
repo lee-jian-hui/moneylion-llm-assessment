@@ -1,0 +1,5 @@
+Question: How many rows are in the 'transactions' table?
+Answer: There are 257063 rows in the 'transactions' table.
+
+Question: Can you filter for transactions with merchant '1INFINITE'?
+Answer: There are 10 rows in the 'transactions' table where the merchant is '1INFINITE'.

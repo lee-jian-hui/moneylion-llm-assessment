@@ -1,12 +1,14 @@
+
+# mine:
 .env
 *.pdf
-*.csv
+data.csv
 *.db
 *.log
 **.pyc
 *.pyc
 models/
-
+settings.json
 
 # other python gitignore template files
 # REF: https://github.com/github/gitignore/blob/main/Python.gitignore
