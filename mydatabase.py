@@ -5,16 +5,27 @@ from sqlalchemy import (
     DateTime, create_engine, Column, Integer, String, Float, Date, MetaData, Table
 )
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, DeclarativeBase
+from langchain_experimental.sql import SQLDatabaseChain, SQLDatabaseSequentialChain
+
 from dotenv import load_dotenv
 from configs import DATABASE_PATH, DATABASE_URL, TRANSACTION_CSV, CLIENT_INFO_CSV
 from datetime import datetime   
 
 from my_logger import GLOBAL_LOGGER
 
+
 logger = GLOBAL_LOGGER
-# SQLAlchemy Base and Engine
+
+# Create the database engine
+engine = create_engine(DATABASE_URL)
+# Define the Base
 Base = declarative_base()
+# Bind the engine to the Base metadata
+Base.metadata.bind = engine
+# Create session if needed
+Session = sessionmaker(bind=engine)
+session = Session()
 
 class Transaction(Base):
     """
@@ -23,28 +34,24 @@ class Transaction(Base):
     __tablename__ = 'transactions'
     # NOTE: temporary workaround because transaction id is not unique
     id = Column(Integer, primary_key=True, autoincrement=True)  # auto-generated unique id
-
-    clnt_id = Column(Integer, nullable=False)
-    bank_id = Column(Integer, nullable=False)
-    acc_id = Column(Integer, nullable=False)
-    txn_id = Column(Integer, nullable=False)
-    txn_date = Column(DateTime, nullable=False)
-    desc = Column(String, nullable=True)
-    amt = Column(Float, nullable=False)
-    cat = Column(String, nullable=True)
-    merchant = Column(String, nullable=True)
-
+    clnt_id = Column(Integer, nullable=False, info={"description": "Client ID"})
+    bank_id = Column(Integer, nullable=False, info={"description": "Bank ID"})
+    acc_id = Column(Integer, nullable=False, info={"description": "Account ID"})
+    txn_id = Column(Integer, nullable=False, info={"description": "Transaction ID"})
+    txn_date = Column(DateTime, nullable=False, info={"description": "Transaction date"})
+    desc = Column(String, nullable=True, info={"description": "Description"})
+    amt = Column(Float, nullable=False, info={"description": "Amount"})
+    cat = Column(String, nullable=True, info={"description": "Category of the transaction"})
+    merchant = Column(String, nullable=True, info={"description": "Merchant of the transaction"})
 
 class ClientInfo(Base):
     """
     Schema for the clients table.
     """
-    __tablename__ = 'clients'
-    # id = Column(Integer, primary_key=True, autoincrement=True)
+    __tablename__ = "clients"
 
-    clnt_id = Column(Integer, primary_key=True)
-    # clnt_id = Column(Integer, nullable=False)
-    clnt_name = Column(String, nullable=False)
+    clnt_id = Column(Integer, primary_key=True, info={"description": "Client ID"})
+    clnt_name = Column(String, nullable=False, info={"description": "Client Name"})
 
 
 # add other connectors in the future or create an abstraction for other connectors using connection URI/URLs
@@ -164,6 +171,38 @@ def initialize_database(db_path: str = DATABASE_PATH, transaction_csv: str = TRA
         logger.error(f"Error loading client info CSV: {e}")
 
 
+from sqlalchemy.ext.automap import automap_base
+
+def reflect_with_descriptions(engine, base: DeclarativeBase = Base) -> MetaData:
+    """
+    Reflect the database and inject column descriptions based on ORM models.
+
+    Args:
+        engine: SQLAlchemy database engine.
+        base: SQLAlchemy Declarative Base.
+
+    Returns:
+        MetaData with reflected tables and injected column descriptions.
+    """
+    metadata = MetaData()
+    metadata.reflect(bind=engine)  # Reflect the database schema
+
+    # Inject descriptions from ORM models
+    for table_name, table in metadata.tables.items():
+        if table_name in base.metadata.tables:
+            orm_table = base.metadata.tables[table_name]
+            for column_name, column in table.columns.items():
+                if column_name in orm_table.columns:
+                    orm_column = orm_table.columns[column_name]
+                    # Check if the `info` dictionary contains a description
+                    if "description" in orm_column.info:
+                        # Inject the description into the reflected column's `info` dictionary
+                        column.info["description"] = orm_column.info["description"]
+                        logger.info(
+                            f"Injected description for {table_name}.{column_name}: {column.info['description']}"
+                        )
+
+    return metadata
 
 if __name__ == "__main__":
     sqlite_db = SQLiteDB()

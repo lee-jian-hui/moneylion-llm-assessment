@@ -64,9 +64,10 @@ from langchain.prompts import BasePromptTemplate, PromptTemplate
 from langchain.chains import ConversationChain
 from langchain.memory import ConversationBufferMemory
 
-from classes import CustomSQLDatabaseChain, GracefulSQLDatabaseChain
+from classes import CustomSQLDatabaseChain, CustomizableSQLDatabase, GracefulSQLDatabaseChain
 import configs
-from mydatabase import initialize_database
+from mydatabase import initialize_database, Base
+
 from utils import BenchmarkReport, truncate_conversation_history
 from my_logger import GLOBAL_LOGGER
 from myprompts import ALL_PROMPT_STRINGS, DEFAULT_SQLITE_PROMPT, prompt_template_generator, _sqlite_prompt1, _sqlite_prompt2, _sqlite_prompt3
@@ -74,6 +75,8 @@ import myprompts
 from configs import DATABASE_PATH, DATABASE_URL, DEFAULT_CHAT_OUTPUT_FILEPATH, DEFAULT_MODEL_PATH
 
 
+DEFAULT_SQL_CHAIN_CLS=SQLDatabaseChain  
+DEFAULT_SQLDATABASE_CLS=CustomizableSQLDatabase  
 DEFAULT_MAX_TOKENS = configs.DEFAULT_MAX_TOKENS
 DEFAULT_TEMPERATURE=configs.DEFAULT_TEMPERATURE
 DEFAULT_CONTEXT_WINDOW_SIZE=configs.DEFAULT_CONTEXT_WINDOW_SIZE
@@ -175,20 +178,29 @@ class CustomLlamaLLM(LLM):
         context_window_size: {self.context_window_size}
         """
 
-def load_database_connection(database_url: str = DATABASE_URL) -> SQLDatabase: 
+from sqlalchemy import create_engine
+from mydatabase import reflect_with_descriptions, Base
+
+def load_database_connection(database_url: str = DATABASE_URL) -> SQLDatabase:
     """
     Load the database connection using LangChain's SQLDatabase module.
+    Includes column descriptions.
 
     Returns:
         SQLDatabase: A connection to the SQL database.
     """
     try:
-        db = SQLDatabase.from_uri(database_url)
-        logger.info("Database connected successfully.")
+        engine = create_engine(database_url)
+        # metadata = reflect_with_descriptions(engine, Base)  # Reflect with descriptions
+        db = DEFAULT_SQLDATABASE_CLS(engine=engine)  # Pass custom metadata
+        logger.info("Database connected successfully with descriptions.")
+        logger.info(f"Reflected Table Info:\n{db.table_info}")
+
         return db
     except Exception as e:
-        logger.info(f"Error connecting to database: {e}")
+        logger.error(f"Error connecting to database: {e}")
         return None
+
 
 
 # NOTE: intentially separate out from creating LlamaLLM process to be able to swap out different prompt templates without rebuilding LLM instance
@@ -196,15 +208,24 @@ def create_llm_chain(
     database: SQLDatabase, 
     llm: CustomLlamaLLM, 
     prompt: Optional[BasePromptTemplate] = None,
-    database_chain_cls: Type[Union[SQLDatabaseChain, SQLDatabaseSequentialChain]]=GracefulSQLDatabaseChain,
+    database_chain_cls: Type[Union[SQLDatabaseChain, SQLDatabaseSequentialChain]] = GracefulSQLDatabaseChain,
 ) -> Optional[Union[SQLDatabaseChain, SQLDatabaseSequentialChain]]:
     try:
+        # Generate table info from SQLAlchemy schemas
+        # table_info = generate_table_info_from_orm_models(Base)
+        # logger.info(f"Generated Table Info:\n{table_info}")
+
+        # # Format the prompt with the generated table info
+        # prompt = prompt or DEFAULT_SQLITE_PROMPT
+        # formatted_prompt = prompt.format(table_info=table_info)
+
+        # Create the LLM chain
         db_chain = database_chain_cls.from_llm(llm=llm, db=database, prompt=prompt, verbose=True)
 
         logger.info("Banking assistant created successfully.")
         return db_chain
     except Exception as e:
-        logger.info(f"Error creating banking assistant: {e}")
+        logger.error(f"Error creating banking assistant: {e}")
         return None
 
 
@@ -246,8 +267,8 @@ def chat_loop(
     if simulated and questions:
         for question in questions:
             question = question.strip()  # Normalize input
-            print(f"\nYour Query: {question}")
-            logger.info(f"Simulated Query: {question}")
+            print(f"\Simulated Question: {question}")
+            logger.info(f"Simulated Question: {question}")
             try:
                 if use_memory:
                     # Use memory-based approach
@@ -258,7 +279,7 @@ def chat_loop(
 
                 print("\nQuery Result:")
                 print(response)
-                logger.info(f"question: {question}")
+                # logger.info(f"question: {question}")
                 logger.info(f"llm response: {response}")
 
                 if report:
@@ -288,10 +309,18 @@ def chat_loop(
 
                 print("\nQuery Result:")
                 print(response)
+                logger.info(f"question: {question}")
+                logger.info(f"llm response: {response}")
+                if report:
+                    report.add_question_and_answer(question, response)
+
             except Exception as e:
+                # NOTE: you could replace this with a prettier message for the user without the full trace
                 error_message = f"Error processing query: {e}"
                 print(error_message)
                 logger.error(error_message)
+                if report:
+                    report.add_error(question, error_message)
 
     # Save benchmark results if applicable
     if report and output_file:
@@ -446,7 +475,7 @@ def benchmark_run(use_memory: bool = False) -> None:
         context_sizes, 
         prompt_templates, 
         question_set,
-        llm_chain_cls=configs.DEFAULT_SQL_CHAIN_CLS,
+        llm_chain_cls=DEFAULT_SQL_CHAIN_CLS,
         output_dir=output_dir,
         use_memory=use_memory
     )
@@ -455,7 +484,7 @@ def main_run_loop(use_memory: bool = False):
     # choose sqllite prompt 3 from my prompt
     context_window_size = DEFAULT_CONTEXT_WINDOW_SIZE
     llama_llm = build_llama_llm(context_window_size=context_window_size)
-    sql_llm_chain = build_llm_chain(llama_llm, prompt=DEFAULT_SQLITE_PROMPT, sql_chain_cls=configs.DEFAULT_SQL_CHAIN_CLS)
+    sql_llm_chain = build_llm_chain(llama_llm, prompt=DEFAULT_SQLITE_PROMPT, sql_chain_cls=DEFAULT_SQL_CHAIN_CLS)
     chat_loop(
         llm_chain=sql_llm_chain, 
         prompt_template=DEFAULT_SQLITE_PROMPT,
@@ -495,7 +524,7 @@ if __name__ == "__main__":
         # Simulate a chain of questions
         context_window_size = DEFAULT_CONTEXT_WINDOW_SIZE
         llama_llm = build_llama_llm(context_window_size=context_window_size)
-        sql_llm_chain = build_llm_chain(llama_llm, prompt=DEFAULT_SQLITE_PROMPT, sql_chain_cls=configs.DEFAULT_SQL_CHAIN_CLS)
+        sql_llm_chain = build_llm_chain(llama_llm, prompt=DEFAULT_SQLITE_PROMPT, sql_chain_cls=DEFAULT_SQL_CHAIN_CLS)
         simulated_questions = configs.SIMULATED_QUES_SET
         chat_loop(
             llm_chain=sql_llm_chain,

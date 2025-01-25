@@ -4,8 +4,6 @@ Declare constants and extracted vars from os env here
 
 from dotenv import load_dotenv
 import os
-from classes import CustomSQLDatabaseChain, CustomSQLDatabaseSequentialChain
-from langchain_experimental.sql import SQLDatabaseChain, SQLDatabaseSequentialChain
 
 
 load_dotenv(".env")
@@ -28,10 +26,10 @@ DEFAULT_CHAT_OUTPUT_FILEPATH=getenv_and_echo("DEFAULT_CHAT_OUTPUT_FILEPATH", "ch
 DEFAULT_MAX_TOKENS = 200
 DEFAULT_TEMPERATURE=0.4
 DEFAULT_CONTEXT_WINDOW_SIZE=8000
-ALLOWED_WINDOW_SIZES=[8000, 16000, 32768]
+ALLOWED_WINDOW_SIZES=[16000, 32000]
+# ALLOWED_WINDOW_SIZES=[8000, 16000, 32768]
 # select between: CustomSQLDatabaseChain, CustomSQLDatabaseSequentialChain, SQLDatabaseChain, SQLDatabaseSequentialChain
 # NOTE: currently only SQLDatabaseChain is stable, consider extending support for other chain types
-DEFAULT_SQL_CHAIN_CLS=SQLDatabaseChain  
 
 
 BENCHMARK_QUES_SET=[
@@ -50,6 +48,8 @@ SIMULATED_QUES_SET=[
 MODEL_PATHS=[
     # "./models/codellama-34b-instruct.Q3_K_L.gguf",
     # "./models/mistral-7b-instruct-v0.1.Q4_K_M.gguf",
-    "./models/mistral-7b-instruct-v0.2-Q4_K_M.gguf",
-    "./models/mistral-7B-Instruct-v0.3-Q4_K_M.gguf"
+    # "./models/mistral-7b-instruct-v0.2-Q4_K_M.gguf",
+    # "./models/mistral-7B-Instruct-v0.3-Q4_K_M.gguf",
+    "./models/mistral-7B-Instruct-v0.3-Q6_K.gguf"
 ]
+

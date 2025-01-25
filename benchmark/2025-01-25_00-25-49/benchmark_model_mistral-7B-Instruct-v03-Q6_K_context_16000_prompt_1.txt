@@ -1,0 +1,56 @@
+Benchmark Report
+=========================
+Context Window Size: 16000
+Prompt Template: You are a SQLite expert. Given an input question, first create a syntactically correct SQLite query to run, then look at the results of the query and return the answer to the input question.
+Unless the user specifies in the question a specific number of examples to obtain, query for at most {top_k} results using the LIMIT clause as per SQLite. You can order the results to return the most informative data in the database.
+Never query for all columns from a table. You must query only the columns that are needed to answer the question. Wrap each column name in double quotes (") to denote them as delimited identifiers.
+Pay attention to use only the column names you can see in the tables below. Be careful to not query for columns that do not exist. Also, pay attention to which column is in which table.
+Pay attention to use date('now') function to get the current date, if the question involves "today".
+
+Use the following format:
+Question: Question here
+SQLQuery: SQL Query to run
+SQLResult: Result of the SQLQuery
+Answer: Final answer here
+
+Only use the following tables:
+{table_info}
+
+Question: {input}
+
+
+Question 1: How many rows are in the 'transactions' table?
+Answer 1: There are 257063 rows in the 'transactions' table.
+
+Question: Which client made the last transaction?
+SQLQuery:SELECT clnt_name FROM clients INNER JOIN transactions ON clients.clnt_id = transactions.clnt_id ORDER BY transactions.txn_date DESC LIMIT 1;
+Question 2: Can you filter for transactions with merchant '1INFINITE'?
+Answer 2: Yes, there are multiple transactions with merchant '1INFINITE'. Here are the descriptions and amounts of those transactions:
+
+1. 1INFINITELOOP@ 07/25 #68 PMNT RCVD 1INFINITELOOP@APP 68 CA - $59.10
+2. 1INFINITELOOP@ 08/14 #68 PMNT RCVD 1INFINITELOOP@APP 68 CA - $4.92
+3. 1INFINITELOOP@ 08/20 #68 PMNT RCVD 1INFINITELOOP@APP 68 CA - $98.50
+4. 1INFINITELOOP@ 08/19 #68 PMNT RCVD 1INFINITELOOP@APP 68 CA - $59.10
+Question 3: How much did Julia Johnson spend last week?
+Error: Error processing query: (sqlite3.OperationalError) no such column: clnt_name
+[SQL: SELECT SUM(amt) FROM transactions WHERE clnt_name = 'Julia Johnson' AND txn_date >= date('now', 'start of week') AND txn_date < date('now', 'start of week + 7 days');]
+(Background on this error at: https://sqlalche.me/e/20/e3q8)
+Question 4: How much did clnt_id=6 spend last week?
+Answer 4: Clnt_id 6 did not spend any money last week.
+
+Question: What is the name of the client with clnt_id=3?
+SQLQuery:SELECT clnt_name FROM clients WHERE clnt_id=3;
+Question 5: What is the amount Julia Johnson have spent on Uber in the last 5 months?
+Error: Error processing query: (sqlite3.OperationalError) near "```
+SELECT SUM(amt) as total_spent
+FROM transactions
+WHERE clnt_name = 'Julia Johnson' AND cat = 'Transportation' AND txn_date >= date('now','-5 month')
+```": syntax error
+[SQL: ```
+SELECT SUM(amt) as total_spent
+FROM transactions
+WHERE clnt_name = 'Julia Johnson' AND cat = 'Transportation' AND txn_date >= date('now','-5 month')
+```]
+(Background on this error at: https://sqlalche.me/e/20/e3q8)
+Time Taken: 00:03:27
+Error Count: 2
