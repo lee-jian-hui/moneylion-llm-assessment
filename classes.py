@@ -42,7 +42,116 @@ logger = GLOBAL_LOGGER
 
 # NOTE: trying to overwrite the table info passed into the chain, as well as opportunity to log internal workings
 class CustomSQLDatabaseChain(SQLDatabaseChain):
-    def _call(self, inputs: dict, run_manager=None):
+
+
+    def _call(
+        self,
+        inputs: Dict[str, Any],
+        run_manager: Optional[CallbackManagerForChainRun] = None,
+    ) -> Dict[str, Any]:
+
+        inputs: str = self._pre_call(inputs, run_manager)
+
+        _run_manager = run_manager or CallbackManagerForChainRun.get_noop_manager()
+        input_text = f"{inputs[self.input_key]}\n{SQL_QUERY}"
+        _run_manager.on_text(input_text, verbose=self.verbose)
+        # If not present, then defaults to None which is all tables.
+        table_names_to_use = inputs.get("table_names_to_use")
+        table_info = self.database.get_table_info(table_names=table_names_to_use)
+        llm_inputs = {
+            "input": input_text,
+            "top_k": str(self.top_k),
+            "dialect": self.database.dialect,
+            "table_info": table_info,
+            "stop": ["\nSQLResult:"],
+        }
+        if self.memory is not None:
+            for k in self.memory.memory_variables:
+                llm_inputs[k] = inputs[k]
+        intermediate_steps: List = []
+        try:
+            intermediate_steps.append(llm_inputs.copy())  # input: sql generation
+            sql_cmd = self.llm_chain.predict(
+                callbacks=_run_manager.get_child(),
+                **llm_inputs,
+            ).strip()
+            if self.return_sql:
+                return {self.output_key: sql_cmd}
+            if not self.use_query_checker:
+                _run_manager.on_text(sql_cmd, color="green", verbose=self.verbose)
+                intermediate_steps.append(
+                    sql_cmd
+                )  # output: sql generation (no checker)
+                intermediate_steps.append({"sql_cmd": sql_cmd})  # input: sql exec
+                if SQL_QUERY in sql_cmd:
+                    sql_cmd = sql_cmd.split(SQL_QUERY)[1].strip()
+                if SQL_RESULT in sql_cmd:
+                    sql_cmd = sql_cmd.split(SQL_RESULT)[0].strip()
+                result = self.database.run(sql_cmd)
+                intermediate_steps.append(str(result))  # output: sql exec
+            else:
+                query_checker_prompt = self.query_checker_prompt or PromptTemplate(
+                    template=QUERY_CHECKER, input_variables=["query", "dialect"]
+                )
+                query_checker_chain = LLMChain(
+                    llm=self.llm_chain.llm, prompt=query_checker_prompt
+                )
+                query_checker_inputs = {
+                    "query": sql_cmd,
+                    "dialect": self.database.dialect,
+                }
+                checked_sql_command: str = query_checker_chain.predict(
+                    callbacks=_run_manager.get_child(), **query_checker_inputs
+                ).strip()
+                intermediate_steps.append(
+                    checked_sql_command
+                )  # output: sql generation (checker)
+                _run_manager.on_text(
+                    checked_sql_command, color="green", verbose=self.verbose
+                )
+                intermediate_steps.append(
+                    {"sql_cmd": checked_sql_command}
+                )  # input: sql exec
+                result = self.database.run(checked_sql_command)
+                intermediate_steps.append(str(result))  # output: sql exec
+                sql_cmd = checked_sql_command
+
+            GLOBAL_LOGGER.info(f"sql_cmd executed in chain: {sql_cmd}")
+
+            _run_manager.on_text("\nSQLResult: ", verbose=self.verbose)
+            _run_manager.on_text(str(result), color="yellow", verbose=self.verbose)
+            # If return direct, we just set the final result equal to
+            # the result of the sql query result, otherwise try to get a human readable
+            # final answer
+            if self.return_direct:
+                final_result = result
+            else:
+                _run_manager.on_text("\nAnswer:", verbose=self.verbose)
+                input_text += f"{sql_cmd}\nSQLResult: {result}\nAnswer:"
+                llm_inputs["input"] = input_text
+                intermediate_steps.append(llm_inputs.copy())  # input: final answer
+
+                # TODO: prompt engineer this part of the chain such that it will not try to append its answer with another question + SQL query
+                # e..g "There are 257063 rows in the 'transactions' table.\n\nQuestion: How many transactions does client with ID 1 have?\nSQLQuery:SELECT COUNT(*) FROM transactions WHERE clnt_id = 1;"
+                final_result = self.llm_chain.predict(
+                    callbacks=_run_manager.get_child(),
+                    **llm_inputs,
+                ).strip()
+                
+                intermediate_steps.append(final_result)  # output: final answer
+                _run_manager.on_text(final_result, color="green", verbose=self.verbose)
+            chain_result: Dict[str, Any] = {self.output_key: final_result}
+            if self.return_intermediate_steps:
+                chain_result[INTERMEDIATE_STEPS_KEY] = intermediate_steps
+            return chain_result
+        except Exception as exc:
+            # Append intermediate steps to exception, to aid in logging and later
+            # improvement of few shot prompt seeds
+            exc.intermediate_steps = intermediate_steps  # type: ignore
+            raise exc
+
+
+    def _pre_call(self, inputs: dict, run_manager=None) -> str:
         # Extract the table_info from the database
         table_names_to_use = inputs.get("table_names_to_use")
         original_table_info = self.database.get_table_info(table_names=table_names_to_use)
@@ -57,7 +166,8 @@ class CustomSQLDatabaseChain(SQLDatabaseChain):
         self.verbose and print(f"Modified Table Info:\n{modified_table_info}")
 
         # Call the original predict method
-        return super()._call(inputs, run_manager)
+        # return super()._call(inputs, run_manager)
+        return inputs
 
 
     def _generate_extra_table_info(

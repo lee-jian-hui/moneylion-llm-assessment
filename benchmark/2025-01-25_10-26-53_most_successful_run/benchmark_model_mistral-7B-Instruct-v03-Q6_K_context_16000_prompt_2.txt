@@ -6,6 +6,8 @@ Unless the user specifies in the question a specific number of examples to obtai
 Never query for all columns from a table. You must query only the columns that are needed to answer the question. Wrap each column name in double quotes (") to denote them as delimited identifiers.
 Pay attention to use only the column names you can see in the tables below. Be careful to not query for columns that do not exist. Also, pay attention to which column is in which table.
 Pay attention to use date('now') function to get the current date, if the question involves "today".
+Important: Do not include "Question: " in your answer. You are not allowed to generate Questions.
+Important: You should never include ``` in the generated SQL Query as this is not a valid syntax. e.g. ``` SELECT * FROM transations ``` is not allowed.
 
 The below are correct examples of how you should reason about your answer:
 Correct Example 1:
@@ -34,6 +36,19 @@ SQL Query Result: [
     100159	6	1	1	48	2023-06-16 00:00:00	Pos Adjustment - Cr Empower Finance, I Visa Direct CA US	20.0	Loans	Empower	6	Julia Johnson
 ]
 Assistant LLM: Julia Johnson has 5 transactions in total.
+
+Correct Example 4:
+User: Can you show total amount of money for transactions for 'Julia Johnson'?
+SQL Query: SELECT SUM(t.amt) FROM transactions t JOIN clients c ON t.clnt_id=c.clnt_id WHERE c.clnt_name='Julia Johnson' LIMIT 5;
+SQL Query Result: [
+    1	6	1	1	54	2023-07-31 00:00:00	CLOC Advance	6.286	Shops	NULL	6	Julia Johnson,
+    2	6	1	1	27	2023-07-31 00:00:00	CLOC Advance	6.286	Shops	NULL	6	Julia Johnson,
+    3	6	1	1	11	2023-08-01 00:00:00	CLOC Advance	2.268	Shops	NULL	6	Julia Johnson,
+    100158	6	1	1	42	2023-07-31 00:00:00	Pos Adjustment - Cr Brigit New York NY US	10.0	Loans	NULL	6	Julia Johnson,
+    100159	6	1	1	48	2023-06-16 00:00:00	Pos Adjustment - Cr Empower Finance, I Visa Direct CA US	20.0	Loans	Empower	6	Julia Johnson
+]
+Assistant LLM: Julia Johnson has 5 transactions in total.
+
 
 The below are incorrect examples:
 Incorrect Example 1:
@@ -86,22 +101,46 @@ Answer: Final answer here
 Only use the following tables:
 {table_info}
 
+
+Important: You must only answer the question provided by the user. Do not simulate user input or create hypothetical questions.
 Question: {input}
 
 
 Question 1: How many rows are in the 'transactions' table?
-Error 1: Error processing query: 'top_k'
-
+Answer 1: There are 257063 rows in the transactions table.
 Question 2: Can you filter for transactions with merchant '1INFINITE'?
-Error 2: Error processing query: 'top_k'
-
+Answer 2: There are 5 transactions with merchant '1INFINITE'. The transactions are:
+1. 1INFINITELOOP@ 07/25 #68 PMNT RCVD 1INFINITELOOP@APP 68 CA for 59.1 in Shops category
+2. 1INFINITELOOP@ 08/14 #68 PMNT RCVD 1INFINITELOOP@APP 68 CA for 4.924 in Shops category
+3. 1INFINITELOOP@ 08/20 #68 PMNT RCVD 1INFINITELOOP@APP 68 CA for 98.5 in Shops category
+4. 1INFINITELOOP@ 08/19 #68 PMNT RCVD 1INFINITELOOP@APP 68 CA for 59
 Question 3: How much did Julia Johnson spend last week?
-Error 3: Error processing query: 'top_k'
+Error: Error processing query: (sqlite3.OperationalError) near "(": syntax error
+[SQL: (Assuming that 'clnt_name' is a string and 'amt' is a float)
 
+```
+SELECT SUM(CAST(amt AS REAL))
+FROM transactions
+WHERE txn_date >= DATE('now','-7 days')
+AND clnt_name = 'Julia Johnson';
+```
+
+Note: The CAST function is used to convert the 'amt' column to a real number, as it is assumed to be a string in the original query.
+
+Also, I've used single quotes for the string 'Julia Johnson' as per SQLite syntax.]
+(Background on this error at: https://sqlalche.me/e/20/e3q8)
 Question 4: How much did clnt_id=6 spend last week?
-Error 4: Error processing query: 'top_k'
-
+Answer 4: The client with clnt_id=6 did not have any transactions last week.
 Question 5: What is the amount Julia Johnson have spent on Uber in the last 5 months?
-Error 5: Error processing query: 'top_k'
+Error: Error processing query: (sqlite3.OperationalError) near "(": syntax error
+[SQL: (Assuming all the column names are correct and the data types are properly matched)
 
-Time Taken: 00:00:00
+```
+SELECT SUM(t.amt)
+FROM transactions t
+INNER JOIN clients c ON t.clnt_id=c.clnt_id
+WHERE c.clnt_name='Julia Johnson' AND t.merchant LIKE '%Uber%' AND t.txn_date >= DATE('now','-5 month');
+```]
+(Background on this error at: https://sqlalche.me/e/20/e3q8)
+Time Taken: 00:20:51
+Error Count: 2

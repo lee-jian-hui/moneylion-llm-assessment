@@ -303,6 +303,30 @@ AUTOMATIC (specific storage options)
 FOREIGN DATA WRAPPER
 USER DEFINED TYPES (complex types)
 
+"""
+
+
+
+""" PROMPT SUFFIXES """
+
+
+PROMPT_SUFFIX1 = """Only use the following tables:
+{table_info}
+
+
+Question: {input}
+"""
+
+PROMPT_SUFFIX2 = """Only use the following tables:
+{table_info}
+
+
+Important: You must only answer the question provided by the user. Do not simulate user input or create hypothetical questions.
+Question: {input}
+"""
+
+PROMPT_SUFFIX3 = """Only use the following tables:
+{table_info}
 
 Use the following format to generate your answer:
 Question: Question here
@@ -310,30 +334,48 @@ SQLQuery: SQL Query to run
 SQLResult: Result of the SQLQuery
 Answer: Final answer here
 
+Important: You must only answer the question provided by the user. Do not include another question in your answer.
+Question: {input}
 """
 
-
-
-def prompt_template_generator(prompt: str = _sqlite_prompt1) -> PromptTemplate:
-    # can be useful for e2e testing to generate and test against different prompts
-    
-    return PromptTemplate(
-        input_variables=["input", "table_info", "top_k"],
-        template=prompt + PROMPT_SUFFIX,
-    )
-
-
-
-PROMPT_SUFFIX = """Only use the following tables:
+PROMPT_SUFFIX4 = """Only use the following tables:
 {table_info}
 
+Use the following format to generate your answer:
+Question: Question here
+SQLQuery: SQL Query to run
+SQLResult: Result of the SQLQuery
+Answer: Final answer here
+
+Important: Do not include "Question: " in your answer. You are not allowed to generate Questions.
+Important: You should never include ``` in the generated SQL Query as this is not a valid syntax. e.g. ``` SELECT * FROM transations ``` is not allowed. Only include raw SQL code in the SQL query you generate.
 Question: {input}
 """
 
 
+# modified from the default one that langchain's `SQLDatabaseChain` uses
+DEFAULT_SQL_CHECKER_PROMPT = """
+{query}
+Double check the {dialect} query above for common mistakes, including:
+- Using NOT IN with NULL values
+- Using UNION when UNION ALL should have been used
+- Using BETWEEN for exclusive ranges
+- Data type mismatch in predicates
+- Properly quoting identifiers
+- Using the correct number of arguments for functions
+- Casting to the correct data type
+- Using the proper columns for joins
+
+If there are any of the above mistakes, rewrite the query. If there are no mistakes, just reproduce the original query.
+
+Important: Output the final SQL query only. Do not include any comments. Do not include any use of ``` and ` in your output code.
+
+SQL Query: """
+
+
 ALL_PROMPT_STRINGS=[
-    _sqlite_prompt1,
-    _sqlite_prompt2,
+    # _sqlite_prompt1,
+    # _sqlite_prompt2,
     # _sqlite_prompt3,
     # _sqlite_prompt4,
     # _sqlite_prompt5,
@@ -341,8 +383,27 @@ ALL_PROMPT_STRINGS=[
     _sqlite_prompt7,
 ]
 
-DEFAULT_SQLITE_PROMPT = PromptTemplate(
+ALL_PROMPT_SUFFIXES = [
+    # PROMPT_SUFFIX1,
+    # PROMPT_SUFFIX2,
+    # PROMPT_SUFFIX3,
+    PROMPT_SUFFIX4,
+
+]
+
+
+# Uses the best possible combination that is tested over benchmark question sets
+DEFAULT_SQLITE_PROMPT_TEMPLATE = PromptTemplate(
     input_variables=["input", "table_info", "top_k"],
-    template=_sqlite_prompt1 + PROMPT_SUFFIX,
+    template=_sqlite_prompt7 + PROMPT_SUFFIX3,
 )
+
+
+def prompt_template_generator(prompt: str = _sqlite_prompt1, prompt_suffix: str = PROMPT_SUFFIX1) -> PromptTemplate:
+    # can be useful for e2e testing to generate and test against different prompts
+    
+    return PromptTemplate(
+        input_variables=["input", "table_info", "top_k"],
+        template=prompt + prompt_suffix,
+    )
 

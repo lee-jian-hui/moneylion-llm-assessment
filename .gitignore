@@ -9,6 +9,10 @@ data.csv
 *.pyc
 models/
 settings.json
+.vscode
+.cache
+archive/
+*.zip
 
 # other python gitignore template files
 # REF: https://github.com/github/gitignore/blob/main/Python.gitignore

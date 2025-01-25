@@ -70,7 +70,7 @@ from mydatabase import initialize_database, Base
 
 from utils import BenchmarkReport, truncate_conversation_history
 from my_logger import GLOBAL_LOGGER
-from myprompts import ALL_PROMPT_STRINGS, DEFAULT_SQLITE_PROMPT, prompt_template_generator, _sqlite_prompt1, _sqlite_prompt2, _sqlite_prompt3
+from myprompts import ALL_PROMPT_STRINGS, DEFAULT_SQLITE_PROMPT_TEMPLATE, prompt_template_generator, _sqlite_prompt1, _sqlite_prompt2, _sqlite_prompt3
 import myprompts
 from configs import DATABASE_PATH, DATABASE_URL, DEFAULT_CHAT_OUTPUT_FILEPATH, DEFAULT_MODEL_PATH
 
@@ -204,11 +204,11 @@ def load_database_connection(database_url: str = DATABASE_URL) -> SQLDatabase:
 
 
 # NOTE: intentially separate out from creating LlamaLLM process to be able to swap out different prompt templates without rebuilding LLM instance
-def create_llm_chain(
+def create_sql_llm_chain(
     database: SQLDatabase, 
     llm: CustomLlamaLLM, 
     prompt: Optional[BasePromptTemplate] = None,
-    database_chain_cls: Type[Union[SQLDatabaseChain, SQLDatabaseSequentialChain]] = GracefulSQLDatabaseChain,
+    database_chain_cls: SQLDatabaseChain = CustomSQLDatabaseChain,
 ) -> Optional[Union[SQLDatabaseChain, SQLDatabaseSequentialChain]]:
     try:
         # Generate table info from SQLAlchemy schemas
@@ -216,11 +216,29 @@ def create_llm_chain(
         # logger.info(f"Generated Table Info:\n{table_info}")
 
         # # Format the prompt with the generated table info
-        # prompt = prompt or DEFAULT_SQLITE_PROMPT
+        # prompt = prompt or DEFAULT_SQLITE_PROMPT_TEMPLATE
         # formatted_prompt = prompt.format(table_info=table_info)
 
         # Create the LLM chain
-        db_chain = database_chain_cls.from_llm(llm=llm, db=database, prompt=prompt, verbose=True)
+        db_chain = database_chain_cls.from_llm(
+            llm=llm, 
+            db=database, 
+            prompt=prompt, 
+            verbose=True,
+            # Number of results to return from the query
+            top_k = 5,
+            # Will return sql-command directly without executing it
+            return_sql = False,
+            # Whether or not to return the intermediate steps along with the final answer.
+            return_intermediate_steps = False,
+            return_direct = False,
+            #Whether or not the query checker tool should be used to attempt to fix the initial SQL from the LLM.
+            use_query_checker = True,
+            # NOTE: attempt to do prompt engineering on query checking layer
+            query_checker_prompt= PromptTemplate(
+                template=myprompts.DEFAULT_SQL_CHECKER_PROMPT, input_variables=["query", "dialect"]
+            )
+        )
 
         logger.info("Banking assistant created successfully.")
         return db_chain
@@ -229,6 +247,7 @@ def create_llm_chain(
         return None
 
 
+# TODO: make it such that if provided prompt template, will override the model instance original one
 def chat_loop(
     llm_chain: Union[SQLDatabaseChain, SQLDatabaseSequentialChain], 
     prompt_template: PromptTemplate, 
@@ -267,7 +286,7 @@ def chat_loop(
     if simulated and questions:
         for question in questions:
             question = question.strip()  # Normalize input
-            print(f"\Simulated Question: {question}")
+            print(f"\nSimulated Question: {question}")
             logger.info(f"Simulated Question: {question}")
             try:
                 if use_memory:
@@ -309,10 +328,10 @@ def chat_loop(
 
                 print("\nQuery Result:")
                 print(response)
-                logger.info(f"question: {question}")
+                logger.info(f"question: {user_input}")
                 logger.info(f"llm response: {response}")
                 if report:
-                    report.add_question_and_answer(question, response)
+                    report.add_question_and_answer(user_input, response)
 
             except Exception as e:
                 # NOTE: you could replace this with a prettier message for the user without the full trace
@@ -320,7 +339,7 @@ def chat_loop(
                 print(error_message)
                 logger.error(error_message)
                 if report:
-                    report.add_error(question, error_message)
+                    report.add_error(user_input, error_message)
 
     # Save benchmark results if applicable
     if report and output_file:
@@ -367,7 +386,7 @@ def benchmark_models_with_contexts(
     context_window_sizes: List[int],
     prompt_templates: List[PromptTemplate],
     question_set: List[str],
-    llm_chain_cls: Type[SQLDatabaseChain | SQLDatabaseSequentialChain],
+    llm_chain_cls: Type[SQLDatabaseChain | SQLDatabaseSequentialChain] = DEFAULT_SQL_CHAIN_CLS,
     output_dir: str = "./benchmark_results",
     use_memory: bool = False
 ) -> None:
@@ -434,7 +453,7 @@ def build_llama_llm(
 def build_llm_chain(
         llama_llm: CustomLlamaLLM,
         prompt: Optional[BasePromptTemplate] = None,
-        sql_chain_cls: Type[Union[SQLDatabaseChain, SQLDatabaseSequentialChain]] = GracefulSQLDatabaseChain,
+        sql_chain_cls: Type[Union[SQLDatabaseChain, SQLDatabaseSequentialChain]] = DEFAULT_SQL_CHAIN_CLS,
     ) -> Optional[Union[SQLDatabaseChain, SQLDatabaseSequentialChain]]:
     # Load the model
 
@@ -445,15 +464,17 @@ def build_llm_chain(
         return
 
     # Create the banking assistant
-    sql_llm_chain = create_llm_chain(database=database, llm=llama_llm, prompt=prompt, database_chain_cls=sql_chain_cls)
+    sql_llm_chain = create_sql_llm_chain(database=database, llm=llama_llm, prompt=prompt, database_chain_cls=sql_chain_cls)
     if not sql_llm_chain:
         logger.error("Failed to create SQL LLM chain.")
         return
     
     # overwrite prompt template
-    sql_llm_chain.llm_chain.prompt = DEFAULT_SQLITE_PROMPT
+    # sql_llm_chain.llm_chain.prompt = DEFAULT_SQLITE_PROMPT_TEMPLATE
 
-    logger.info(f"New LLMCHAIN: [RUNTIME WINDOW_SIZE: {llama_llm._model._n_ctx}, MAX_TOKENS:{llama_llm._max_tokens}, TEMPERATURE: {llama_llm._temperature}]")
+    logger.info(f"[New LLMCHAIN]:")
+    logger.info(f"MODEL: [RUNTIME WINDOW_SIZE: {llama_llm._model._n_ctx}, MAX_TOKENS:{llama_llm._max_tokens}, TEMPERATURE: {llama_llm._temperature}]:")
+    logger.info(f"CHAIN: [PROMPT: {sql_llm_chain.llm_chain.prompt}]:")
 
     return sql_llm_chain
 
@@ -462,13 +483,19 @@ def benchmark_run(use_memory: bool = False) -> None:
     # Define models, context sizes, and prompts for benchmarking
     model_paths = configs.MODEL_PATHS
     context_sizes = ALLOWED_WINDOW_SIZES
-    prompt_templates = [prompt_template_generator(prompt_str) for prompt_str in ALL_PROMPT_STRINGS]
-    question_set = configs.BENCHMARK_QUES_SET
+    
+    prompt_templates = []
+    for prompt_suffix in myprompts.ALL_PROMPT_SUFFIXES:
+        for prompt_str in myprompts.ALL_PROMPT_STRINGS:
+            prompt_template  = prompt_template_generator(prompt_str, prompt_suffix)
+            prompt_templates.append(prompt_template)
+
 
     # Generate output directory based on the current date and time
     current_datetime = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     output_dir = f"benchmark/{current_datetime}"
 
+    question_set = configs.BENCHMARK_QUES_SET
     # Run benchmarking
     benchmark_models_with_contexts(
         model_paths, 
@@ -484,10 +511,10 @@ def main_run_loop(use_memory: bool = False):
     # choose sqllite prompt 3 from my prompt
     context_window_size = DEFAULT_CONTEXT_WINDOW_SIZE
     llama_llm = build_llama_llm(context_window_size=context_window_size)
-    sql_llm_chain = build_llm_chain(llama_llm, prompt=DEFAULT_SQLITE_PROMPT, sql_chain_cls=DEFAULT_SQL_CHAIN_CLS)
+    sql_llm_chain = build_llm_chain(llama_llm, prompt=DEFAULT_SQLITE_PROMPT_TEMPLATE, sql_chain_cls=DEFAULT_SQL_CHAIN_CLS)
     chat_loop(
         llm_chain=sql_llm_chain, 
-        prompt_template=DEFAULT_SQLITE_PROMPT,
+        prompt_template=DEFAULT_SQLITE_PROMPT_TEMPLATE,
         simulated=False,
         output_file=DEFAULT_CHAT_OUTPUT_FILEPATH,
         use_memory=use_memory
@@ -524,11 +551,11 @@ if __name__ == "__main__":
         # Simulate a chain of questions
         context_window_size = DEFAULT_CONTEXT_WINDOW_SIZE
         llama_llm = build_llama_llm(context_window_size=context_window_size)
-        sql_llm_chain = build_llm_chain(llama_llm, prompt=DEFAULT_SQLITE_PROMPT, sql_chain_cls=DEFAULT_SQL_CHAIN_CLS)
+        sql_llm_chain = build_llm_chain(llama_llm, prompt=DEFAULT_SQLITE_PROMPT_TEMPLATE, sql_chain_cls=DEFAULT_SQL_CHAIN_CLS)
         simulated_questions = configs.SIMULATED_QUES_SET
         chat_loop(
             llm_chain=sql_llm_chain,
-            prompt_template=DEFAULT_SQLITE_PROMPT,
+            prompt_template=DEFAULT_SQLITE_PROMPT_TEMPLATE,
             simulated=True,
             questions=simulated_questions,
             use_memory=args.memory,

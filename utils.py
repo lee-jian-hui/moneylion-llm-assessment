@@ -105,15 +105,19 @@ class BenchmarkReport:
     def add_question_and_answer(self, question: str, answer: str):
         self.questions.append(question)
         self.answers.append(answer)
+        self.conversation_history_lines.append(f"\n")
         self.conversation_history_lines.append(f"Question {self.conversation_steps + 1}: {question}")
         self.conversation_history_lines.append(f"Answer {self.conversation_steps + 1}: {answer}")
+        self.conversation_history_lines.append(f"\n")
         self.conversation_steps+=1
 
     def add_error(self, question: str, error: str):
         self.questions.append(question)
         self.errors.append(error)
+        self.conversation_history_lines.append(f"\n")
         self.conversation_history_lines.append(f"Question {self.conversation_steps + 1}: {question}")
         self.conversation_history_lines.append(f"Error: {error}")
+        self.conversation_history_lines.append(f"\n")
         self.conversation_steps+=1
 
     def generate_report(self) -> str:
